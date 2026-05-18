@@ -1,0 +1,72 @@
+[tools]
+python = "latest"
+uv = "latest"
+ruff = "latest"
+"pipx:pytest" = "latest"
+
+[env]
+_.python.venv = { path = ".venv", create = true }
+PYTHONPATH = "{{ config_root }}/mise/lib"
+
+# File tasks:
+#
+# docs:hammerspoon
+# ----------------
+# Generate Hammerspoon API docs (Markdown) into skills/mac/references/hammerspoon
+#
+#  - mise run docs:hammerspoon
+#  - mise run docs:hammerspoon <branch-or-tag>
+#
+# docs:aerospace
+# --------------
+# Pull AeroSpace docs (AsciiDoc) into skills/mac/references/aerospace
+#
+#  - mise run docs:aerospace
+#  - mise run docs:aerospace <branch-or-tag>
+
+# docs:karabiner
+# --------------
+# Pull Karabiner-Elements JSON configuration manual (Markdown) into skills/mac/references/karabiner
+#
+#  - mise run docs:karabiner
+#  - mise run docs:karabiner -- --keep-images
+
+# docs:wezterm
+# ------------
+# Pull WezTerm docs (Markdown) into skills/wezterm/references/wezterm
+#
+#  - mise run docs:wezterm
+#  - mise run docs:wezterm <branch-or-tag>
+
+# docs:sketchybar
+# ---------------
+# Pull SketchyBar docs/config into skills/mac/references/sketchybar
+#
+#  - mise run docs:sketchybar
+#  - mise run docs:sketchybar <branch-or-tag>   # default: documentation
+
+# docs:datastar
+# -------------
+# Build Datastar docs into var/datastar (raw HTML + cleaned HTML + Markdown)
+#
+#  - mise run docs:datastar
+#  - mise run docs:datastar -- --lang clojure
+#  - mise run docs:datastar:go
+#  - mise run docs:datastar:clojure
+#  - mise run docs:datastar:all
+
+# docs:templ
+# ----------
+# Sync templ docs into var/templ (repo docs + LLM single-file)
+#
+#  - mise run docs:templ
+#  - mise run docs:templ:llms
+#  - mise run docs:templ:repo
+#  - mise run docs:templ -- --ref <branch-or-tag>
+
+# docs:pitchfork
+# --------------
+# Pull curated Pitchfork docs into skills/pitchfork/references
+#
+#  - mise run docs:pitchfork
+#  - mise run docs:pitchfork <branch-or-tag>
