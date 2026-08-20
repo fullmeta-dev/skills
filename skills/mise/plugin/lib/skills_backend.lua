@@ -157,7 +157,6 @@ local function config_root(options)
         end
     end
     candidate = candidate or os.getenv("MISE_CONFIG_ROOT")
-        or os.getenv("MISE_PROJECT_ROOT") or os.getenv("PWD")
     if candidate == nil or candidate == "" then
         fail("relative path sources require the declaring config root")
     end
