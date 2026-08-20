@@ -1,5 +1,24 @@
 My skills for ai agents.
 
+Before using a Matt Pocock skill, load `adapt-matt-pocock-skills` and apply it
+for the current harness.
+
+## Agent skills
+
+### Issue tracker
+
+Issues are tracked in GitHub for `fullmeta-dev/skills`. See
+`docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Use the default engineering triage labels. See
+`docs/agents/triage-labels.md`.
+
+### Domain docs
+
+This repository uses a single-context layout. See `docs/agents/domain.md`.
+
 ## Agent harnesses
 - Codex cli and Codex app
 - [Pi coding agent](packages/coding-agent)
