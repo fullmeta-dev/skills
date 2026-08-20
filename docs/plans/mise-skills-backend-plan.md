@@ -187,7 +187,9 @@ safe source subpath for every source type.
 - GitHub sources resolve `track` or an explicit ref to a full commit and write
   `version = "rev:<full-commit>"`.
 - Local sources compute a deterministic tree digest and write
-  `version = "tree:<sha256>"`.
+  `version = "tree-<sha256>"`. This mise-compatible spelling is an
+  implementation detail: `use` and `upgrade` resolve and write it
+  automatically; users do not select or calculate versions.
 - `--locked` means do not resolve or rewrite a version. Fetching an absent
   already-pinned Git commit is allowed.
 - `--locked` does not imply offline operation; it only prevents resolving or
@@ -396,7 +398,7 @@ commands or undocumented external-command dispatch.
 
 ### Milestone 1: backend and local vertical slice
 
-Implement the Lua backend for `path:` sources and `tree:<sha256>` versions.
+Implement the Lua backend for `path:` sources and `tree-<sha256>` versions.
 Implement a minimal Rust CLI that discovers one `SKILL.md`, materializes it for
 Pi, records one config-root ownership manifest, and removes it.
 
