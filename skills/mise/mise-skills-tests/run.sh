@@ -95,7 +95,16 @@ asset_name() {
 }
 
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/mise-skills-compat.XXXXXX")"
+GITHUB_FIXTURE_PID=""
+stop_github_fixture() {
+    if [[ -n "$GITHUB_FIXTURE_PID" ]]; then
+        kill "$GITHUB_FIXTURE_PID" 2>/dev/null || true
+        wait "$GITHUB_FIXTURE_PID" 2>/dev/null || true
+        GITHUB_FIXTURE_PID=""
+    fi
+}
 cleanup() {
+    stop_github_fixture
     if [[ "$KEEP_TEMP" == 1 ]]; then
         printf 'preserving compatibility fixtures at %s\n' "$WORK_DIR"
     else
@@ -146,7 +155,9 @@ make_plugin_repo() {
     git -C "$PLUGIN_DIR" -c user.email=compat@example.invalid -c user.name=compat commit -qm initial
     PLUGIN_REF_ONE="$(git -C "$PLUGIN_DIR" rev-parse HEAD)"
 
-    sed -i 's/0.1.0-compat/0.1.0-compat-2/' "$PLUGIN_DIR/metadata.lua"
+    local metadata_tmp="$PLUGIN_DIR/metadata.lua.tmp"
+    sed 's/0.1.0-compat/0.1.0-compat-2/' "$PLUGIN_DIR/metadata.lua" > "$metadata_tmp"
+    mv "$metadata_tmp" "$PLUGIN_DIR/metadata.lua"
     git -C "$PLUGIN_DIR" add metadata.lua
     git -C "$PLUGIN_DIR" -c user.email=compat@example.invalid -c user.name=compat commit -qm replacement
     PLUGIN_REF_TWO="$(git -C "$PLUGIN_DIR" rev-parse HEAD)"
@@ -189,13 +200,22 @@ assert_file_contains() {
     }
 }
 
+shell_quote() {
+    local value="$1"
+    printf "'%s'" "$(printf '%s' "$value" | sed "s/'/'\\\\''/g")"
+}
+
 bootstrap_command() {
     printf 'bash %s %s %s %s' \
-        "$SCRIPT_DIR/bootstrap-plugin.sh" skills "$PLUGIN_URL" "$PLUGIN_REF_ONE"
+        "$(shell_quote "$SCRIPT_DIR/bootstrap-plugin.sh")" \
+        "$(shell_quote skills)" "$(shell_quote "$PLUGIN_URL")" \
+        "$(shell_quote "$PLUGIN_REF_ONE")"
 }
 
 minimum_command() {
-    printf 'bash %s %s %s' "$SCRIPT_DIR/ensure-minimum.sh" mise "$MINIMUM_VERSION"
+    printf 'bash %s %s %s' \
+        "$(shell_quote "$SCRIPT_DIR/ensure-minimum.sh")" \
+        "$(shell_quote mise)" "$(shell_quote "$MINIMUM_VERSION")"
 }
 
 write_bootstrap_config() {
@@ -249,9 +269,9 @@ run_bootstrap() {
 run_options() {
     printf '  3/6 string, array, and nested tool options\n'
     bash "$SCRIPT_DIR/bootstrap-plugin.sh" skills "$PLUGIN_URL" "$PLUGIN_REF_ONE" >/dev/null
-    cat > mise.toml <<'EOF'
+    cat > mise.toml <<EOF
 [plugins]
-"vfox-backend:skills" = "PLACEHOLDER"
+"vfox-backend:skills" = "$PLUGIN_URL#$PLUGIN_REF_ONE"
 
 [tools]
 "skills:string" = "0.0.0"
@@ -268,7 +288,6 @@ agents = ["pi", "codex"]
 mode = "locked"
 selectors = ["one", "two"]
 EOF
-    sed -i "s|PLACEHOLDER|$PLUGIN_URL#$PLUGIN_REF_ONE|" mise.toml
     run_mise install --jobs=1 >/dev/null
     python3 - "$LOG_FILE" <<'PY'
 import json
@@ -297,13 +316,101 @@ PY
 run_postinstall() {
     printf '  4/6 postinstall hook after a no-op install\n'
     bash "$SCRIPT_DIR/bootstrap-plugin.sh" skills "$PLUGIN_URL" "$PLUGIN_REF_ONE" >/dev/null
+
+    local fixture_dir="$CASE_DIR/github-fixture"
+    local port_file="$fixture_dir/port"
+    local asset_file="$fixture_dir/mise-skills-fixture"
+    local request_log="$fixture_dir/requests.log"
+    mkdir -p "$fixture_dir"
+    cat > "$asset_file" <<'EOF'
+#!/bin/sh
+printf '%s\n' cli >> "$SKILLS_COMPAT_LOG"
+for arg in "$@"; do printf 'arg=%s\n' "$arg" >> "$SKILLS_COMPAT_LOG"; done
+EOF
+    chmod +x "$asset_file"
+    : > "$request_log"
+    cat > "$fixture_dir/server.py" <<'PY'
+import http.server
+import json
+import sys
+from urllib.parse import urlparse
+
+port_file, asset_file, request_log = sys.argv[1:]
+
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, format_string, *args):
+        with open(request_log, "a", encoding="utf-8") as log:
+            log.write(f"{self.command} {self.path}\n")
+
+    def do_GET(self):
+        path = urlparse(self.path).path
+        port = server.server_address[1]
+        asset_url = f"http://127.0.0.1:{port}/assets/mise-skills-fixture"
+        asset = {
+            "name": "mise-skills-fixture",
+            "browser_download_url": asset_url,
+            "url": asset_url,
+        }
+        release = {
+            "tag_name": "v0.1.0",
+            "draft": False,
+            "prerelease": False,
+            "created_at": "2026-01-01T00:00:00Z",
+            "published_at": "2026-01-01T00:00:00Z",
+            "assets": [asset],
+        }
+        if "/releases/tags/" in path:
+            body = json.dumps(release).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if path.endswith("/releases") or path.endswith("/releases/latest"):
+            body = json.dumps([release]).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if path == "/assets/mise-skills-fixture":
+            with open(asset_file, "rb") as asset:
+                body = asset.read()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        body = b"not found"
+        self.send_response(404)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+with open(port_file, "w", encoding="ascii") as port:
+    port.write(str(server.server_address[1]))
+server.serve_forever()
+PY
+    python3 -u "$fixture_dir/server.py" "$port_file" "$asset_file" \
+        "$request_log" > "$fixture_dir/server.log" 2>&1 &
+    GITHUB_FIXTURE_PID=$!
+    for _ in {1..50}; do
+        [[ -s "$port_file" ]] && break
+        sleep 0.1
+    done
+    [[ -s "$port_file" ]]
+    local github_api_url="http://127.0.0.1:$(cat "$port_file")"
     cat > "$MISE_CONFIG_DIR/config.toml" <<EOF
 [plugins]
 "vfox-backend:skills" = "$PLUGIN_URL#$PLUGIN_REF_ONE"
 
-[tools."skills:mise-skills"]
-version = "0.0.0"
-bin = "mise-skills"
+[tools]
+"github:fullmeta-dev/skills" = { version = "0.1.0", bin = "mise-skills", asset_pattern = "mise-skills-fixture", api_url = "$github_api_url" }
 
 [tasks.skills]
 dir = "{{cwd}}"
@@ -320,10 +427,13 @@ EOF
     run_mise install --jobs=1 >/dev/null
     run_mise install --jobs=1 >/dev/null
     [[ "$(grep -c '^cli$' "$LOG_FILE")" == 2 ]]
+    grep -Fq '/repos/fullmeta-dev/skills/releases/tags/v0.1.0' "$request_log"
+    grep -Fq '/assets/mise-skills-fixture' "$request_log"
     printf '  5/6 globally managed mise-skills is on the postinstall PATH\n'
     [[ "$(grep -c '^arg=sync$' "$LOG_FILE")" == 2 ]]
     [[ "$(grep -c '^arg=--locked$' "$LOG_FILE")" == 2 ]]
     printf '  6/6 explicit task invocation preserves argv\n'
+    stop_github_fixture
 }
 
 run_selected_release() {
@@ -346,13 +456,15 @@ run_old_release_rejection() {
     begin_case older-release "$binary"
     write_bootstrap_config
     set +e
-    output="$(bash "$SCRIPT_DIR/ensure-minimum.sh" "$CASE_BIN" "$MINIMUM_VERSION" 2>&1)"
+    output="$(run_mise bootstrap --yes 2>&1)"
     status=$?
     set -e
-    [[ "$status" == 78 ]]
+    # mise 2026.6.13 wraps the pre-tools hook's status 78 as bootstrap status 1.
+    [[ "$status" == 1 ]]
     grep -Fq "requires mise >= $MINIMUM_VERSION" <<< "$output"
     grep -Fq 'Upgrade mise before installing skills' <<< "$output"
     [[ ! -e "$MISE_DATA_DIR/plugins/skills" ]]
+    [[ ! -e "$MISE_DATA_DIR/installs" ]]
     [[ ! -s "$LOG_FILE" ]]
     printf '%s\n' "$output"
     printf '[older-release-rejection] passed\n'
