@@ -73,7 +73,7 @@ it through a normal task:
 
 ```toml
 [tools]
-"github:fullmeta-dev/mise-skills" = "0.1.0"
+"github:fullmeta-dev/skills" = { version = "0.1.0", bin = "mise-skills" }
 
 [tasks.skills]
 description = "Manage Agent Skills"
@@ -120,10 +120,10 @@ The user-owned global mise config, tracked in dotfiles, declares:
 
 ```toml
 [plugins]
-"vfox-backend:skills" = "https://github.com/fullmeta-dev/mise-skills.git#<plugin-commit>"
+"vfox-backend:skills" = "https://github.com/fullmeta-dev/skills.git#<plugin-commit>"
 
 [tools]
-"github:fullmeta-dev/mise-skills" = "0.1.0"
+"github:fullmeta-dev/skills" = { version = "0.1.0", bin = "mise-skills" }
 ```
 
 `[plugins]` records the desired plugin repository but does not itself install
@@ -133,7 +133,7 @@ therefore installs it in a documented **pre-tools bootstrap hook**, before
 
 ```toml
 [bootstrap.hooks.pre-tools]
-run = "mise plugins install skills https://github.com/fullmeta-dev/mise-skills.git#<plugin-commit>"
+run = "mise plugins install skills https://github.com/fullmeta-dev/skills.git#<plugin-commit>"
 ```
 
 The installer command is idempotent: it checks the installed plugin URL/ref
@@ -308,8 +308,19 @@ Use normal mise scope, without a custom global/project merge engine:
 
 ### Initial adapters
 
-Implement Pi, Codex, and Cursor using their documented/current skill
-directories. Adapter paths are isolated behind a small adapter interface:
+Implement these target layouts behind a small adapter interface:
+
+| Adapter | Global scope | Project scope |
+| --- | --- | --- |
+| `agents` | `~/.agents/skills` | `.agents/skills` |
+| `pi` | `~/.pi/agent/skills` | `.pi/skills` |
+| `claude` | `~/.claude/skills` | `.claude/skills` |
+
+`agents` is the shared Agent Skills location used by Codex and Cursor. The
+`codex` and `cursor` values are accepted aliases for `agents`; duplicate
+materialization operations are coalesced. Adapter integration tests must prove
+that the current Codex and Cursor releases discover the shared target at both
+scopes before release.
 
 ```text
 id
@@ -346,16 +357,17 @@ V1 behavior:
 ### Repository layout
 
 ```text
-mise-skills/
-  plugin/
+skills/
+  mise/plugin/
     metadata.lua
     hooks/backend_list_versions.lua
     hooks/backend_install.lua
-  crates/mise-skills/
+  mise/mise-skills/
+    Cargo.toml
     src/
-  tests/
-    fixtures/
-  docs/
+  mise/mise-skills-tests/
+  docs/mise-skills.md
+  tests/fixtures/
 ```
 
 The plugin is Lua because that is mise's documented backend-plugin interface.
@@ -421,12 +433,36 @@ Implement AST-preserving `use`, `upgrade`, `remove`, and postinstall-hook
 insertion. Test global/project/path targets, comments, all existing hook
 shapes, repeated use, and hook preservation.
 
-### Milestone 5: complete adapters and hardening
+### Milestone 5: complete adapters and documentation
 
-Complete Pi, Codex, and Cursor adapter coverage. Test scope-local ownership,
-collisions, dangling links caused by direct
-`mise unuse`, and `prune`. Add strict Agent Skills validation as a diagnostic
-command and release documentation.
+Complete `agents` (Codex/Cursor), Pi, and Claude adapter coverage. Test
+scope-local ownership, collisions, dangling links caused by direct `mise
+unuse`, and `prune`. Add strict Agent Skills validation as a diagnostic command
+and complete the documentation and help deliverables below.
+
+### Documentation and help deliverables
+
+The feature is not complete until it is self-describing in the CLI and easy to
+bootstrap from repository documentation.
+
+- Implement `mise-skills --help` and every subcommand's `--help` with a short
+  purpose, argument/flag descriptions, scope behavior, and copy-pasteable
+  examples. `list`, `use`, `sync`, `status`, `upgrade`, `remove`, and `prune`
+  must each explain their normal and failure paths.
+- Give the global mise `skills` task a `description` and `usage` definition so
+  `mise tasks info skills` is useful and `mise run skills --help` delegates to
+  the CLI help without side effects.
+- Generate and ship shell completions from the CLI for Bash, Zsh, Fish, and
+  PowerShell; document installation through mise.
+- Rewrite this repository's `README.md` so the mise-skills quick start is
+  prominent while preserving the existing repository-as-skill-source usage.
+  Include prerequisites, one-command bootstrap, minimal global and project
+  setup, plus upgrade and removal examples.
+- Add `docs/mise-skills.md` as the concise reference: source syntax,
+  immutable versions and `track`, selector grammar, tags/catalog layout,
+  agent target mapping, symlink ownership/conflicts, and troubleshooting.
+- Keep examples synchronized with CLI tests. Every documented command must be
+  covered by an integration or snapshot test.
 
 ## Validation
 
