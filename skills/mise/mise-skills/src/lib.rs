@@ -573,7 +573,8 @@ fn load_catalog(source: &Path) -> LoadedCatalog {
                 if let Err(error) = validate_tags(tags) {
                     diagnostics.push(Diagnostic::error(Some(pattern.clone()), error));
                 }
-                tag_patterns.push((glob.compile_matcher(), tags.clone()));
+                let valid_tags = tags.iter().filter(|tag| valid_tag(tag)).cloned().collect();
+                tag_patterns.push((glob.compile_matcher(), valid_tags));
             }
             Err(error) => diagnostics.push(Diagnostic::error(
                 Some(pattern.clone()),
@@ -748,7 +749,7 @@ fn discover_root(
                 continue;
             }
         };
-        if entry.file_name() != "SKILL.md" || entry.depth() == 0 {
+        if entry.file_name() != "SKILL.md" {
             continue;
         }
         let Some(skill_root) = entry.path().parent() else {

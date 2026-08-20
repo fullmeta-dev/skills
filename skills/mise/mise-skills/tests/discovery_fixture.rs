@@ -120,3 +120,26 @@ fn malformed_yaml_invalid_tags_and_escaping_links_are_reported() {
         .iter()
         .any(|message| message.contains("escapes skill root")));
 }
+
+#[test]
+fn invalid_catalog_tags_are_diagnostics_and_not_attached() {
+    let result = discover(fixture("discovery-invalid-catalog")).expect("fixture source");
+    assert!(result.has_errors());
+    assert_eq!(result.skills.len(), 1);
+    assert_eq!(result.skills[0].tags, vec!["valid"]);
+    assert!(result
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.message.contains("invalid tag")));
+}
+
+#[test]
+fn source_and_catalog_roots_can_be_skills() {
+    let source_root = discover(fixture("discovery-source-root-skill")).expect("fixture source");
+    assert_eq!(source_root.skills.len(), 1);
+    assert_eq!(source_root.skills[0].path, "");
+
+    let catalog_root = discover(fixture("discovery-catalog-root-skill")).expect("fixture source");
+    assert_eq!(catalog_root.skills.len(), 1);
+    assert_eq!(catalog_root.skills[0].path, "skill");
+}
