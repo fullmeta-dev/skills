@@ -36,3 +36,13 @@ skills/mise/mise-skills-tests/run.sh
 Use `MISE_SKILLS_LATEST_MISE_VERSION` or the binary override variables from
 `run.sh --help` when reproducing a release-specific result. Set
 `MISE_SKILLS_KEEP_TEMP=1` to inspect a failed fixture.
+
+Run the backend-only source snapshot checks with:
+
+```sh
+skills/mise/mise-skills-tests/backend_test.sh
+```
+
+That fixture exercises deterministic local trees, drift and traversal
+rejection, escaping links, generic Git commits, GitHub shorthand, cache reuse,
+and snapshot-only manifests without requiring a network GitHub repository.

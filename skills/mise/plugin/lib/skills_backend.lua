@@ -273,26 +273,33 @@ end
 
 local function validate_version(kind, version)
     if type(version) ~= "string" then
-        fail("version must be an immutable tree:<sha256> or rev:<full-commit>")
+        fail("version must be an immutable tree-<sha256> or rev:<full-commit>")
     end
     if kind == "path" then
-        local digest = version:match("^tree:([0-9a-fA-F]+)$")
+        local digest = version:match("^tree%-([0-9a-fA-F]+)$")
         if digest == nil or #digest ~= 64 then
-            fail("local sources require version tree:<64 hexadecimal characters>")
+            fail("local sources require version tree-<64 hexadecimal characters>")
         end
-        return "tree", digest:lower()
+        return "tree", digest:lower(), "tree-" .. digest:lower()
     end
 
     local revision = version:match("^rev:([0-9a-fA-F]+)$")
-    if revision == nil or #revision ~= 40 then
-        fail("Git sources require version rev:<full 40-character commit>")
+    if revision == nil then
+        -- mise's native `ls-remote` surface accepts ordinary versions but
+        -- rejects the custom rev: prefix. Keep the list output usable as an
+        -- install input while recording the immutable form canonically.
+        revision = version:match("^([0-9a-fA-F]+)$")
     end
-    return "rev", revision:lower()
+    if revision == nil or #revision ~= 40 then
+        fail("Git sources require version rev:<full 40-character commit> or a raw full commit")
+    end
+    return "rev", revision:lower(), "rev:" .. revision:lower()
 end
 
 local function validate_links(root)
     local script = [[
 set -eu
+set -o pipefail
 export LC_ALL=C
 root=$1
 root_real=$(realpath "$root")
@@ -325,6 +332,7 @@ local function tree_digest(root)
     validate_links(root)
     local script = [[
 set -eu
+set -o pipefail
 export LC_ALL=C
 root=$1
 find "$root" -mindepth 1 \( -name .git -o -name .mise-skills-manifest.json -o -name .skills-backend \) -prune -o -print0 |
@@ -494,7 +502,7 @@ function backend.install(ctx)
     local source, subpath = source_options(ctx.options)
     local kind, value = source_kind(source)
     validate_tool_key(ctx.tool, source, kind, value, ctx.options)
-    local version_kind, version_value = validate_version(kind, ctx.version)
+    local version_kind, version_value, canonical_version = validate_version(kind, ctx.version)
 
     local source_root
     local temporary_root
@@ -534,8 +542,8 @@ function backend.install(ctx)
     if installed_digest:lower() ~= expected_digest:lower() then
         fail("installed snapshot failed integrity verification")
     end
-    write_manifest(destination, canonical_source, subpath, ctx.version,
-        kind == "path" and ctx.version or ("rev:" .. version_value), expected_digest)
+    write_manifest(destination, canonical_source, subpath, canonical_version,
+        kind == "path" and canonical_version or ("rev:" .. version_value), expected_digest)
     if temporary_root ~= nil then
         run("rm -rf " .. quote(temporary_root))
     end
@@ -549,7 +557,13 @@ function backend.list_versions(ctx)
     end
 
     local source
-    if tool:match("^[%w_.-]+/[%w_.-]+$") then
+    if tool:sub(1, 6) == "local/" then
+        -- A local path source has no remote versions to list. More
+        -- importantly, returning an empty list prevents mise from treating
+        -- the generated local source key as GitHub shorthand before it calls
+        -- BackendInstall with the already-resolved tree- pin.
+        return {versions = {}}
+    elseif tool:match("^[%w_.-]+/[%w_.-]+$") then
         source = "github:" .. tool
     elseif tool:sub(1, 7) == "github:" then
         source = tool
@@ -571,7 +585,10 @@ function backend.list_versions(ctx)
         local sha = line:match("^([0-9a-fA-F]+)%s")
         if sha ~= nil and #sha == 40 and not seen[sha:lower()] then
             seen[sha:lower()] = true
-            revisions[#revisions + 1] = "rev:" .. sha:lower()
+            -- mise validates BackendListVersions values as ordinary release
+            -- versions and rejects the custom rev: prefix there. BackendInstall
+            -- accepts the raw commit too and canonicalizes it to rev:<commit>.
+            revisions[#revisions + 1] = sha:lower()
         end
     end
     table.sort(revisions)
