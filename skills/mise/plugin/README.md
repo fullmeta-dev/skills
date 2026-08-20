@@ -19,8 +19,10 @@ source_subpath = "skills"
 Local `path:` sources are resolved against `config_root` when it is supplied
 by the caller (the backend also accepts the mise project/config root
 environment values). Their immutable version is
-`tree-<64-character-sha256>`. The CLI resolves and writes this pin; users do
-not calculate versions.
+`tree-<64-character-sha256>`. This is an internal mise-compatible encoding:
+the planned `mise-skills` lifecycle commands resolve and write it; users must
+not calculate or hand-write a local digest. There is no supported manual
+local-digest workflow in this backend milestone.
 GitHub shorthand is converted to a Git URL; `git:` accepts HTTPS, SSH, and
 file URLs. `track` is intentionally ignored by installation.
 

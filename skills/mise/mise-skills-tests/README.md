@@ -46,3 +46,15 @@ skills/mise/mise-skills-tests/backend_test.sh
 That fixture exercises deterministic local trees, drift and traversal
 rejection, escaping links, generic Git commits, GitHub shorthand, cache reuse,
 and snapshot-only manifests without requiring a network GitHub repository.
+
+Run the isolated real-mise backend integration with:
+
+```sh
+skills/mise/mise-skills-tests/backend_mise_test.sh
+```
+
+It installs the shipped `mise/plugin` through `mise plugins install`, then
+runs the real plugin through `mise ls-remote` and `mise install` for GitHub and
+local fixtures. The local `tree-` value in that test is a fixture oracle only;
+users must not calculate or enter local digests manually. The planned
+`mise-skills` lifecycle commands own that version-resolution workflow.
