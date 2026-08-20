@@ -1,0 +1,13 @@
+version = 1
+
+[discovery]
+roots = ["skills", "skills/**", "packages/*/agent-skills"]
+exclude = ["skills/excluded/**", "skills/diagnostics/**", "packages/*/agent-skills/fixtures/**"]
+
+[tags]
+"skills/**" = ["repository"]
+"skills/nested/**" = ["nested"]
+"packages/*/agent-skills/**" = ["package"]
+
+[aliases]
+review = "skills/nested/deep/review"
