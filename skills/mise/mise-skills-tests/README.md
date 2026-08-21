@@ -59,9 +59,9 @@ local fixtures. The local `tree-` value in that test is a fixture oracle only;
 users must not calculate or enter local digests manually. The planned
 `mise-skills` lifecycle commands own that version-resolution workflow.
 
-Run the clean CLI lifecycle E2E (configuration, local pinning, simulated
-immutable install, discovery, all adapters, status, upgrade, removal, and
-recovery) with:
+Run the clean real-mise lifecycle E2E (pinned plugin bootstrap, managed CLI
+task, backend install, configuration, local pinning, discovery, all adapters,
+status, upgrade, removal, and recovery) with:
 
 ```sh
 cargo build --manifest-path skills/mise/mise-skills/Cargo.toml
