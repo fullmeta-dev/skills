@@ -271,17 +271,17 @@ pub fn ensure_postinstall(document: &mut DocumentMut) -> Result<(), String> {
         }
         Some(item) if item.as_str().is_some() => {
             let old = item.as_str().unwrap_or_default().to_string();
-            if old.contains(POSTINSTALL_COMMAND) {
+            if contains_exact_postinstall_action(&old) {
                 return Ok(());
             }
+            let mut old_value = item.as_value().cloned().expect("string item has a value");
+            let decor = old_value.decor().clone();
+            old_value.decor_mut().clear();
             let mut array = Array::new();
-            array.push(old);
+            array.push_formatted(old_value);
             array.push(POSTINSTALL_COMMAND);
-            let decor = item.as_value().map(|value| value.decor().clone());
             let mut replacement = Value::Array(array);
-            if let Some(decor) = decor {
-                *replacement.decor_mut() = decor;
-            }
+            *replacement.decor_mut() = decor;
             *item = Item::Value(replacement);
         }
         Some(item) if item.as_array().is_some() => {
@@ -292,14 +292,18 @@ pub fn ensure_postinstall(document: &mut DocumentMut) -> Result<(), String> {
         }
         Some(item) if item.as_table().is_some() => {
             let table = item.as_table_mut().expect("table checked");
-            match table.get_mut("run") {
+            let old = match table.get("run") {
                 Some(run) if run.as_str().is_some() => {
-                    let old = run.as_str().unwrap_or_default().to_string();
-                    if !old.contains(POSTINSTALL_COMMAND) {
-                        *run = value(format!("{old}\n{POSTINSTALL_COMMAND}"));
-                    }
+                    Some(run.as_str().unwrap_or_default().to_string())
                 }
                 Some(_) => return Err("hooks.postinstall.run must be a string".into()),
+                None => None,
+            };
+            match old {
+                Some(old) if !contains_exact_postinstall_action(&old) => {
+                    replace_string(table, "run", &format!("{old}\n{POSTINSTALL_COMMAND}"));
+                }
+                Some(_) => {}
                 None => {
                     table["run"] = value(POSTINSTALL_COMMAND);
                 }
@@ -307,14 +311,19 @@ pub fn ensure_postinstall(document: &mut DocumentMut) -> Result<(), String> {
         }
         Some(item) if item.as_inline_table().is_some() => {
             let table = item.as_inline_table_mut().expect("inline table checked");
-            match table.get_mut("run") {
+            let old = match table.get("run") {
                 Some(run) if run.as_str().is_some() => {
-                    let old = run.as_str().unwrap_or_default().to_string();
-                    if !old.contains(POSTINSTALL_COMMAND) {
-                        *run = Value::from(format!("{old}\n{POSTINSTALL_COMMAND}"));
-                    }
+                    Some(run.as_str().unwrap_or_default().to_string())
                 }
                 Some(_) => return Err("hooks.postinstall.run must be a string".into()),
+                None => None,
+            };
+            match old {
+                Some(old) if !contains_exact_postinstall_action(&old) => {
+                    let run = table.get_mut("run").expect("run checked");
+                    replace_value_preserving_decor(run, &format!("{old}\n{POSTINSTALL_COMMAND}"));
+                }
+                Some(_) => {}
                 None => {
                     table.insert("run", Value::from(POSTINSTALL_COMMAND));
                 }
@@ -347,6 +356,21 @@ fn replace_string(table: &mut Table, field: &str, replacement: &str) {
         }
     }
     table[field] = item;
+}
+
+fn replace_value_preserving_decor(item: &mut Value, replacement: &str) {
+    let decor = item.decor().clone();
+    let mut value = Value::from(replacement);
+    *value.decor_mut() = decor;
+    *item = value;
+}
+
+fn is_postinstall_command(value: &str) -> bool {
+    value == POSTINSTALL_COMMAND
+}
+
+fn contains_exact_postinstall_action(value: &str) -> bool {
+    value.split('\n').any(is_postinstall_command)
 }
 
 fn string_field(table: &Table, field: &str, key: &str) -> Result<String, String> {
@@ -391,13 +415,12 @@ fn string_array_values(values: &[String]) -> Array {
 
 fn array_contains_command(array: &Array) -> bool {
     array.iter().any(|item| {
-        item.as_str()
-            .is_some_and(|value| value.contains(POSTINSTALL_COMMAND))
+        item.as_str().is_some_and(contains_exact_postinstall_action)
             || item
                 .as_inline_table()
                 .and_then(|table| table.get("run"))
                 .and_then(Value::as_str)
-                .is_some_and(|value| value.contains(POSTINSTALL_COMMAND))
+                .is_some_and(contains_exact_postinstall_action)
     })
 }
 
@@ -412,18 +435,49 @@ mod tests {
     #[test]
     fn appends_postinstall_to_string_array_and_table_forms_once() {
         for input in [
-            "[hooks]\npostinstall = \"echo old\"\n",
-            "[hooks]\npostinstall = [\"echo old\"]\n",
-            "[hooks.postinstall]\nrun = \"echo old\"\nenv = { KEEP = \"yes\" }\n",
-            "[hooks]\npostinstall = { run = \"echo old\", env = { KEEP = \"yes\" } }\n",
+            "[hooks]\n# keep string comment\npostinstall = \"echo old\" # keep string suffix\n",
+            "[hooks]\npostinstall = [\"echo old\" # keep array item\n] # keep array suffix\n",
+            "[hooks.postinstall]\n# keep run comment\nrun = \"echo old\" # keep run suffix\nenv = { KEEP = \"yes\" }\n",
+            "[hooks]\npostinstall = { run = \"echo old\", env = { KEEP = \"yes\" } } # keep table suffix\n",
         ] {
             let mut document = doc(input);
             ensure_postinstall(&mut document).unwrap();
             let once = document.to_string();
             ensure_postinstall(&mut document).unwrap();
-            assert_eq!(once, document.to_string());
-            assert!(document.to_string().contains(POSTINSTALL_COMMAND));
-            assert!(document.to_string().contains("echo old"));
+            let rendered = document.to_string();
+            assert_eq!(once, rendered);
+            assert!(rendered.contains(POSTINSTALL_COMMAND));
+            assert!(rendered.contains("echo old"));
+            assert!(rendered.contains("keep"));
+        }
+    }
+
+    #[test]
+    fn postinstall_deduplicates_only_exact_actions() {
+        for input in [
+            "[hooks]\npostinstall = \"echo mise run skills -- sync --locked\"\n",
+            "[hooks]\npostinstall = [\"echo mise run skills -- sync --locked\"]\n",
+            "[hooks.postinstall]\nrun = \"echo mise run skills -- sync --locked\"\n",
+            "[hooks]\npostinstall = { run = \"echo mise run skills -- sync --locked\" }\n",
+        ] {
+            let mut document = doc(input);
+            ensure_postinstall(&mut document).unwrap();
+            let once = document.to_string();
+            ensure_postinstall(&mut document).unwrap();
+            let rendered = document.to_string();
+            assert_eq!(once, rendered);
+            assert_eq!(rendered.matches(POSTINSTALL_COMMAND).count(), 2);
+        }
+
+        for input in [
+            "[hooks]\npostinstall = \"mise run skills -- sync --locked\"\n",
+            "[hooks]\npostinstall = [\"mise run skills -- sync --locked\"]\n",
+            "[hooks.postinstall]\nrun = \"mise run skills -- sync --locked\"\n",
+            "[hooks]\npostinstall = { run = \"mise run skills -- sync --locked\" }\n",
+        ] {
+            let mut document = doc(input);
+            ensure_postinstall(&mut document).unwrap();
+            assert_eq!(document.to_string().matches(POSTINSTALL_COMMAND).count(), 1);
         }
     }
 

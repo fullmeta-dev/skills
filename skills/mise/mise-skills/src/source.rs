@@ -206,7 +206,8 @@ pub fn resolve_git_pin(source: &SourceSpec, reference: Option<&str>) -> Result<G
             });
         }
         let output = run_git(&["ls-remote", &source.url(), reference])?;
-        let revision = parse_remote_revision(&output, reference)
+        let revision = peeled_tag_revision(source, reference)
+            .or_else(|| parse_remote_revision(&output, reference))
             .or_else(|| {
                 run_git(&[
                     "ls-remote",
@@ -431,6 +432,21 @@ fn run_git(args: &[&str]) -> Result<String, String> {
         });
     }
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+fn peeled_tag_revision(source: &SourceSpec, reference: &str) -> Option<String> {
+    let tag = reference.strip_prefix("refs/tags/").unwrap_or(reference);
+    if tag.is_empty() || tag.contains(['*', '?', '[']) {
+        return None;
+    }
+    let output = run_git(&["ls-remote", &source.url(), &format!("refs/tags/{tag}*")]).ok()?;
+    let peeled_name = format!("refs/tags/{tag}^{{}}");
+    output.lines().find_map(|line| {
+        let mut fields = line.split_whitespace();
+        let revision = fields.next()?;
+        let name = fields.next()?;
+        (name == peeled_name && is_commit(revision)).then_some(revision.to_ascii_lowercase())
+    })
 }
 
 fn parse_remote_revision(output: &str, reference: &str) -> Option<String> {

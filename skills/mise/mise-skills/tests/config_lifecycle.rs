@@ -266,6 +266,107 @@ fn git_sources_default_to_the_remote_branch_and_upgrade_explicitly() {
 }
 
 #[test]
+fn annotated_git_tags_pin_the_peeled_commit() {
+    let temp = TempDir::new().unwrap();
+    let repository = temp.path().join("repo");
+    let project = temp.path().join("project");
+    fs::create_dir(&project).unwrap();
+    Command::new("git")
+        .args(["init", "--quiet", repository.to_str().unwrap()])
+        .status()
+        .unwrap();
+    for args in [
+        [
+            "-C",
+            repository.to_str().unwrap(),
+            "config",
+            "user.email",
+            "test@example.invalid",
+        ],
+        [
+            "-C",
+            repository.to_str().unwrap(),
+            "config",
+            "user.name",
+            "test",
+        ],
+    ] {
+        assert!(Command::new("git").args(args).status().unwrap().success());
+    }
+    fs::write(repository.join("one.txt"), "one").unwrap();
+    assert!(Command::new("git")
+        .args(["-C", repository.to_str().unwrap(), "add", "."])
+        .status()
+        .unwrap()
+        .success());
+    assert!(Command::new("git")
+        .args([
+            "-C",
+            repository.to_str().unwrap(),
+            "commit",
+            "--quiet",
+            "-m",
+            "one",
+        ])
+        .status()
+        .unwrap()
+        .success());
+    let commit = String::from_utf8(
+        Command::new("git")
+            .args(["-C", repository.to_str().unwrap(), "rev-parse", "HEAD"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap()
+    .trim()
+    .to_string();
+    assert!(Command::new("git")
+        .args([
+            "-C",
+            repository.to_str().unwrap(),
+            "tag",
+            "--annotate",
+            "v1",
+            "--message",
+            "v1",
+        ])
+        .status()
+        .unwrap()
+        .success());
+    let tag_object = String::from_utf8(
+        Command::new("git")
+            .args([
+                "-C",
+                repository.to_str().unwrap(),
+                "rev-parse",
+                "refs/tags/v1",
+            ])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap()
+    .trim()
+    .to_string();
+
+    let source = format!("git:file://{}", repository.display());
+    let output = run(
+        &project,
+        &["use", &source, "one", "--agent", "pi", "--reference", "v1"],
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let config = fs::read_to_string(project.join("mise.toml")).unwrap();
+    assert!(config.contains(&format!("version = \"rev:{commit}\"")));
+    assert!(!config.contains(&format!("version = \"rev:{tag_object}\"")));
+    assert!(config.contains("track = \"v1\""));
+}
+
+#[test]
 fn a_derived_key_cannot_be_repointed_to_a_different_source() {
     let temp = TempDir::new().unwrap();
     let first_root = temp.path().join("one");
