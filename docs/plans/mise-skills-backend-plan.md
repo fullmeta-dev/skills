@@ -452,8 +452,10 @@ bootstrap from repository documentation.
   examples. `list`, `use`, `sync`, `status`, `upgrade`, `remove`, and `prune`
   must each explain their normal and failure paths.
 - Give the global mise `skills` task a `description` and `usage` definition so
-  `mise tasks info skills` is useful and `mise run skills --help` delegates to
-  the CLI help without side effects.
+  `mise tasks info skills` is useful. Mise reserves an unseparated task
+  `--help` for task help when `usage` is present, so
+  `mise run skills -- --help` is the side-effect-free CLI-help invocation;
+  `mise run skills --help` remains side-effect-free task help.
 - Generate and ship shell completions from the CLI for Bash, Zsh, Fish, and
   PowerShell; document installation through mise.
 - Rewrite this repository's `README.md` so the mise-skills quick start is
