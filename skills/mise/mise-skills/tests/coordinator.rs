@@ -129,6 +129,101 @@ fn self_update_keeps_old_config_when_normal_mise_install_fails() {
 
 #[test]
 #[cfg(unix)]
+fn self_update_dry_run_does_not_install_or_edit() {
+    let temp = TempDir::new().unwrap();
+    let bin_dir = temp.path().join("bin");
+    let config_dir = temp.path().join("config");
+    fs::create_dir_all(&bin_dir).unwrap();
+    fs::create_dir_all(&config_dir).unwrap();
+    let mise = fake_mise(&bin_dir);
+    let config = config_dir.join("config.toml");
+    let original =
+        "[tools.\"github:fullmeta-dev/skills\"]\nversion = \"0.1.0\"\nbin = \"skills\"\n";
+    fs::write(&config, original).unwrap();
+    let manifest = temp.path().join("release-compatibility.json");
+    fs::write(
+        &manifest,
+        r#"{"schema_version":1,"latest":"0.3.0","releases":{"0.3.0":{"minimum_mise":"2026.6.14","plugin_url":"https://new/plugin.git","plugin_revision":"cccccccccccccccccccccccccccccccccccccccc"}}}"#,
+    )
+    .unwrap();
+    let log = temp.path().join("mise.log");
+    let output = Command::new(binary())
+        .current_dir(temp.path())
+        .args(["self-update", "--dry-run"])
+        .env("MISE_BIN", &mise)
+        .env("MISE_CONFIG_DIR", &config_dir)
+        .env("HOME", temp.path().join("home"))
+        .env("PATH", &bin_dir)
+        .env("FAKE_MISE_LOG", &log)
+        .env("SKILLS_COMPATIBILITY_MANIFEST", &manifest)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(fs::read_to_string(&config).unwrap(), original);
+    let invocations = fs::read_to_string(log).unwrap();
+    assert!(!invocations.contains(" install "));
+    assert!(!invocations.contains("plugins install"));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("would update"));
+}
+
+#[test]
+#[cfg(unix)]
+fn self_update_reads_manifest_from_latest_release_asset_fixture() {
+    let temp = TempDir::new().unwrap();
+    let bin_dir = temp.path().join("bin");
+    let config_dir = temp.path().join("config");
+    fs::create_dir_all(&bin_dir).unwrap();
+    fs::create_dir_all(&config_dir).unwrap();
+    let mise = fake_mise(&bin_dir);
+    let config = config_dir.join("config.toml");
+    fs::write(
+        &config,
+        "[tools.\"github:fullmeta-dev/skills\"]\nversion = \"0.1.0\"\nbin = \"skills\"\n",
+    )
+    .unwrap();
+    let manifest = temp.path().join("release-compatibility.json");
+    fs::write(
+        &manifest,
+        r#"{"schema_version":1,"latest":"0.3.0","releases":{"0.3.0":{"minimum_mise":"2026.6.14","plugin_url":"https://new/plugin.git","plugin_revision":"cccccccccccccccccccccccccccccccccccccccc"}}}"#,
+    )
+    .unwrap();
+    let api = temp.path().join("latest-release.json");
+    fs::write(
+        &api,
+        format!(
+            r#"{{"tag_name":"v0.3.0","assets":[{{"name":"release-compatibility.json","browser_download_url":"{}"}}]}}"#,
+            manifest.display()
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(binary())
+        .current_dir(temp.path())
+        .args(["self-update"])
+        .env("MISE_BIN", &mise)
+        .env("MISE_CONFIG_DIR", &config_dir)
+        .env("HOME", temp.path().join("home"))
+        .env("PATH", &bin_dir)
+        .env("FAKE_MISE_LOG", temp.path().join("mise.log"))
+        .env("SKILLS_RELEASE_API", &api)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(fs::read_to_string(&config)
+        .unwrap()
+        .contains("version = \"0.3.0\""));
+}
+
+#[test]
+#[cfg(unix)]
 fn detects_foreign_windows_executable_on_portable_path() {
     let temp = TempDir::new().unwrap();
     let bin_dir = temp.path().join("bin");

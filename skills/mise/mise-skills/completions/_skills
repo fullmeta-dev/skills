@@ -89,6 +89,7 @@ _arguments "${_arguments_options[@]}" : \
 '--env=[Select an environment-specific config]:ENV:_default' \
 '--version=[Install a specific release from the compatibility manifest]:VERSION:_default' \
 '(--path)--global[Update the user-owned global mise config (the default)]' \
+'--dry-run[Show the compatible pair and planned changes without installing or editing]' \
 '-h[Print help]' \
 '--help[Print help]' \
 && ret=0

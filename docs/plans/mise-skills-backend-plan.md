@@ -78,7 +78,7 @@ ordinary mise tool. The earlier task-wrapper design is superseded:
 
 ```toml
 [tools]
-"github:fullmeta-dev/skills" = { version = "0.1.0", bin = "skills" }
+"github:fullmeta-dev/skills" = { version = "<published-release>", bin = "skills" }
 ```
 
 The CLI owns commands the generic tool interface cannot express naturally:
@@ -114,7 +114,7 @@ The user-owned global mise config, tracked in dotfiles, declares:
 "vfox-backend:skills" = "https://github.com/fullmeta-dev/skills.git#<plugin-commit>"
 
 [tools]
-"github:fullmeta-dev/skills" = { version = "0.1.0", bin = "skills" }
+"github:fullmeta-dev/skills" = { version = "<published-release>", bin = "skills" }
 ```
 
 `[plugins]` records the desired plugin repository but does not itself install

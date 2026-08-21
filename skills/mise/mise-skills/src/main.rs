@@ -56,7 +56,7 @@ enum Command {
     /// Update the CLI and its compatible backend as one safe pair.
     #[command(
         name = "self-update",
-        after_help = "Normal: reads the release compatibility manifest, installs the selected CLI release, updates its pinned backend, and commits config only after both succeed. Failure: the old config and backend declaration remain usable. Scope: global by default, or --path/--env. Example: skills self-update"
+        after_help = "Normal: discovers the latest release asset, installs the selected CLI release, updates its pinned backend, and commits config only after both succeed. --dry-run prints the pair and config plan without installing or editing. Failure: the old config and backend declaration remain usable. Scope: global by default, or --path/--env. Example: skills self-update"
     )]
     SelfUpdate(SelfUpdateArgs),
     /// Diagnose executable collisions and selected mise ownership.
@@ -217,6 +217,9 @@ struct SelfUpdateArgs {
     /// Install a specific release from the compatibility manifest.
     #[arg(long, value_name = "VERSION")]
     version: Option<String>,
+    /// Show the compatible pair and planned changes without installing or editing.
+    #[arg(long)]
+    dry_run: bool,
 }
 
 #[derive(Debug, Args)]
@@ -687,20 +690,39 @@ struct CompatibilityRelease {
     plugin_revision: String,
 }
 
+#[derive(Debug, serde::Deserialize)]
+struct LatestRelease {
+    tag_name: String,
+    assets: Vec<ReleaseAsset>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct ReleaseAsset {
+    name: String,
+    browser_download_url: String,
+}
+
 fn run_self_update(args: SelfUpdateArgs) -> ExitCode {
     match self_update_command(args) {
-        Ok((version, path)) => {
-            println!(
-                "updated skills CLI and backend to {version} in {}",
-                path.display()
-            );
+        Ok((version, path, dry_run)) => {
+            if dry_run {
+                println!(
+                    "would update skills CLI and backend to {version} in {}",
+                    path.display()
+                );
+            } else {
+                println!(
+                    "updated skills CLI and backend to {version} in {}",
+                    path.display()
+                );
+            }
             ExitCode::SUCCESS
         }
         Err(error) => fail(error),
     }
 }
 
-fn self_update_command(args: SelfUpdateArgs) -> Result<(String, PathBuf), String> {
+fn self_update_command(args: SelfUpdateArgs) -> Result<(String, PathBuf, bool), String> {
     let scope = args.scope.scope();
     let mut config = Config::load(&scope)?;
     let before = config.document.to_string();
@@ -783,6 +805,14 @@ fn self_update_command(args: SelfUpdateArgs) -> Result<(String, PathBuf), String
         ));
     }
 
+    let new_plugin = format!("{}#{}", release.plugin_url, release.plugin_revision);
+    if args.dry_run {
+        println!("would install CLI github:fullmeta-dev/skills@{version} through mise");
+        println!("would install backend plugin skills from {new_plugin}");
+        println!("would update only {}", config.path.display());
+        return Ok((version, config.path, true));
+    }
+
     // Install the new executable first, without mutating the selected config.
     // This keeps the currently running binary and old declaration usable when
     // a download, backend update, or compatibility check fails.
@@ -796,7 +826,6 @@ fn self_update_command(args: SelfUpdateArgs) -> Result<(String, PathBuf), String
         return Err(process_failure("mise install", &install));
     }
 
-    let new_plugin = format!("{}#{}", release.plugin_url, release.plugin_revision);
     install_plugin_pin(&new_plugin)?;
 
     if let Err(error) = config::update_cli_release(&mut config.document, version.as_str())
@@ -810,34 +839,81 @@ fn self_update_command(args: SelfUpdateArgs) -> Result<(String, PathBuf), String
             ),
         });
     }
-    Ok((version, config.path))
+    Ok((version, config.path, false))
 }
 
 fn load_compatibility_manifest() -> Result<CompatibilityManifest, String> {
-    let location = std::env::var("SKILLS_COMPATIBILITY_MANIFEST").unwrap_or_else(|_| {
-        "https://raw.githubusercontent.com/fullmeta-dev/skills/main/release-compatibility.json"
-            .into()
+    // The local override is deliberately retained as a deterministic test and
+    // air-gapped development seam. Normal updates discover the latest release
+    // through GitHub's API and consume the immutable asset attached to it;
+    // mutable repository branches are never a manifest source.
+    if let Ok(location) = std::env::var("SKILLS_COMPATIBILITY_MANIFEST") {
+        return parse_compatibility_manifest(&read_manifest_location(&location)?);
+    }
+
+    let api = std::env::var("SKILLS_RELEASE_API").unwrap_or_else(|_| {
+        "https://api.github.com/repos/fullmeta-dev/skills/releases/latest".into()
     });
-    let contents = if location.contains("://") {
+    let release_bytes = read_release_api(&api)?;
+    let release: LatestRelease = serde_json::from_slice(&release_bytes)
+        .map_err(|error| format!("cannot parse latest GitHub release response: {error}"))?;
+    let asset = release
+        .assets
+        .iter()
+        .find(|asset| asset.name == "release-compatibility.json")
+        .ok_or_else(|| {
+            format!(
+                "latest GitHub release {} has no release-compatibility.json asset",
+                release.tag_name
+            )
+        })?;
+    parse_compatibility_manifest(&read_manifest_location(&asset.browser_download_url)?)
+}
+
+fn read_release_api(location: &str) -> Result<Vec<u8>, String> {
+    if location.contains("://") {
         let output = ProcessCommand::new("curl")
             .args([
                 "--fail",
                 "--location",
                 "--silent",
                 "--show-error",
-                &location,
+                "--header",
+                "Accept: application/vnd.github+json",
+                "--header",
+                "X-GitHub-Api-Version: 2022-11-28",
+                location,
             ])
+            .output()
+            .map_err(|error| format!("cannot run curl for latest GitHub release: {error}"))?;
+        if !output.status.success() {
+            return Err(process_failure("latest GitHub release lookup", &output));
+        }
+        Ok(output.stdout)
+    } else {
+        fs::read(location)
+            .map_err(|error| format!("cannot read release API fixture {location}: {error}"))
+    }
+}
+
+fn read_manifest_location(location: &str) -> Result<Vec<u8>, String> {
+    if location.contains("://") {
+        let output = ProcessCommand::new("curl")
+            .args(["--fail", "--location", "--silent", "--show-error", location])
             .output()
             .map_err(|error| format!("cannot run curl for compatibility manifest: {error}"))?;
         if !output.status.success() {
             return Err(process_failure("compatibility manifest download", &output));
         }
-        output.stdout
+        Ok(output.stdout)
     } else {
-        fs::read(&location)
-            .map_err(|error| format!("cannot read compatibility manifest {}: {error}", location))?
-    };
-    serde_json::from_slice(&contents)
+        fs::read(location)
+            .map_err(|error| format!("cannot read compatibility manifest {location}: {error}"))
+    }
+}
+
+fn parse_compatibility_manifest(contents: &[u8]) -> Result<CompatibilityManifest, String> {
+    serde_json::from_slice(contents)
         .map_err(|error| format!("cannot parse compatibility manifest: {error}"))
 }
 

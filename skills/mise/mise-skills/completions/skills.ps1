@@ -93,6 +93,7 @@ Register-ArgumentCompleter -Native -CommandName 'skills' -ScriptBlock {
             [CompletionResult]::new('--env', '--env', [CompletionResultType]::ParameterName, 'Select an environment-specific config')
             [CompletionResult]::new('--version', '--version', [CompletionResultType]::ParameterName, 'Install a specific release from the compatibility manifest')
             [CompletionResult]::new('--global', '--global', [CompletionResultType]::ParameterName, 'Update the user-owned global mise config (the default)')
+            [CompletionResult]::new('--dry-run', '--dry-run', [CompletionResultType]::ParameterName, 'Show the compatible pair and planned changes without installing or editing')
             [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help')
             [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help')
             break

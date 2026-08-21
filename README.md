@@ -12,19 +12,20 @@ arm64 only. Install the backend plugin and the released CLI as ordinary
 mise tools (no wrapper task is required):
 
 ```sh
-mise plugins install skills https://github.com/fullmeta-dev/skills.git#348a5b2021d1e8b6d398c1da068fee90bb1c3653
-mise use -g github:fullmeta-dev/skills@0.1.0
+mise plugins install skills https://github.com/fullmeta-dev/skills.git#<compatible-plugin-commit>
+mise use --global --pin github:fullmeta-dev/skills@<release>
 ```
 
 Set the CLI tool options in the global mise config:
 
 ```toml
 [tools."github:fullmeta-dev/skills"]
-version = "0.1.0"
+version = "<release>"
 bin = "skills"
 ```
 
-Then install it through normal mise and select skills in a project:
+Mise shell activation is required for the global binary to be on `PATH`. Then
+install it through normal mise and select skills in a project:
 
 ```sh
 mise install
@@ -32,6 +33,11 @@ skills use fullmeta-dev/skills code-review --agent pi
 skills install
 skills status
 ```
+
+If `skills` is not the expected executable, compare `mise which skills` and
+`command -v skills`. `skills doctor --global` reports a foreign executable;
+remove or reorder that program explicitly after review. The installer never
+deletes a pre-existing `skills` executable.
 
 `skills use` resolves a full Git commit or local tree digest and writes the
 selected config. `skills install` coordinates normal `mise install` for that
@@ -60,11 +66,16 @@ Update the CLI and its pinned backend as a compatible pair:
 skills self-update
 ```
 
-`self-update` reads [`release-compatibility.json`](release-compatibility.json),
-inspects the installed backend in mise plugin data, installs the release before
-changing the selected config, and retains the old config when any step fails.
+`self-update` discovers the latest GitHub release through the release API and
+reads its immutable `release-compatibility.json` asset. It inspects the
+installed backend in mise plugin data, installs the release before changing the
+selected config, and retains the old config when any step fails. Use
+`skills self-update --dry-run` to print the pair and config plan without edits.
 The backend plugin does not need a manually repeated `[plugins]` declaration.
-Inspect collisions before accepting a replacement:
+For a no-network test or controlled fixture, set `SKILLS_RELEASE_API` (API
+JSON) or `SKILLS_COMPATIBILITY_MANIFEST` (manifest JSON) to a local file.
+Inspect
+collisions before accepting a replacement:
 
 ```sh
 skills doctor --global
@@ -102,7 +113,58 @@ skills/mise/mise-skills-tests/backend_test.sh
 skills/mise/mise-skills-tests/e2e.sh
 ```
 
+## Maintainer releases
+
+Releases are deliberate, tag-ref based operations. Ordinary pushes and merges
+do not run the release workflow. From a clean, up-to-date `main` checkout, pick
+one version operation:
+
+```sh
+mise run release -- --patch
+mise run release -- --minor
+mise run release -- --major
+mise run release -- --version 1.4.0
+mise run release -- --minor --yes
+```
+
+The task performs a read-only preflight (clean worktree, `main`,
+`HEAD == origin/main`, credentials, valid Cargo semver, and unused local and
+remote tag), prints the exact plan, and then has two confirmations. The first
+allows changing `Cargo.toml`/`Cargo.lock`, creating `Release skills vX.Y.Z`,
+creating the annotated `vX.Y.Z` tag, and pushing `main` plus the tag. The second
+independently dispatches the external GitHub build. `--yes` accepts both
+confirmations; `--version` accepts an optional leading `v` and is exclusive
+with the bump flags.
+
+If the dispatch fails after the tag is pushed, the tag is retained. Retry only
+the external build with the printed command, or explicitly resume it:
+
+```sh
+mise run release -- --resume --version 1.4.0
+mise run release -- --resume --version 1.4.0 --yes
+```
+
+Resume verifies that the pushed tag points at `HEAD == origin/main` and does
+not edit, commit, tag, or push anything. Never delete or retag a published
+version implicitly. The workflow is `workflow_dispatch` only and must be
+started at `vX.Y.Z`; it derives and verifies the version from Cargo rather than
+accepting a mutable workflow version input. It builds only Linux x86_64
+(`x86_64-unknown-linux-gnu`) and macOS arm64 (`aarch64-apple-darwin`). The
+release contains those archives, `SHA256SUMS`, and the generated immutable
+compatibility manifest whose backend revision is the tagged commit SHA.
+
+Each matrix build consumes an Actions runner, and the macOS arm64 runner is a
+scarcer/costlier allowance than Linux. Use `--dry-run` only for mise's task
+inspection; this release task has explicit confirmations instead of a hidden
+remote action. Do not run a live dispatch while testing task changes: use fake
+`git`, `cargo`, and `gh` commands and assert that only the intended
+`workflow run --ref vX.Y.Z` invocation would occur.
+
 Release assets are built by [`scripts/package-release.sh`](scripts/package-release.sh)
-and `.github/workflows/release.yml`. The first public release and its GitHub
-release publication remain an explicit deployment step after review; this
-checkout intentionally does not publish releases or tags.
+and [`.github/workflows/release.yml`](.github/workflows/release.yml). After a
+public release exists, the read-only integration check can verify the real API,
+manifest, archives, and checksums with
+`RUN_RELEASE_INTEGRATION=1 tests/release_assets_integration.sh`. A local
+developer uses `cargo run --manifest-path skills/mise/mise-skills/Cargo.toml`
+or a separately published development artifact; no committed compatibility
+manifest is a release source.

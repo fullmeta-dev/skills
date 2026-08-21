@@ -40,17 +40,27 @@ assuming undocumented precedence. A foreign executable blocks installation
 unless `--accept-collision` is explicit. Skill-link collisions are reported by
 sync and leave unmanaged files, directories, and symlinks untouched.
 
-`skills self-update` reads `release-compatibility.json`, checks the minimum mise
-version, installs the requested CLI release, updates the exact backend plugin
-pin, and commits the config only after the pair succeeds. The config remains
-unchanged on a failed download or install; a failed plugin replacement attempts
-to restore the old pin before reporting the error.
+`skills self-update` discovers the latest GitHub release through its API and
+reads that release's immutable `release-compatibility.json` asset. It checks the
+minimum mise version, installs the requested CLI release, updates the exact
+backend plugin pin, and commits the config only after the pair succeeds. The
+config remains unchanged on a failed download or install; a failed plugin
+replacement attempts to restore the old pin before reporting the error. Local
+manifest/API paths are injectable for no-network tests.
 
 ## Release contract
 
-The compatibility manifest pairs every CLI release with `minimum_mise`,
-`plugin_url`, and `plugin_revision`. The release workflow builds platform
-assets, emits SHA256 checksums, validates the manifest, and publishes only when
-explicitly enabled by its workflow input. Release/tag publication and live
-asset verification are residual deployment actions after review; this checkout
-does not perform them.
+`mise run release -- --patch|--minor|--major|--version VERSION` is the sole
+operator entrypoint. It requires a clean, current `main`, validates Cargo
+semver and tag availability before writing, then separately confirms the
+version commit/tag push and external workflow dispatch. `--yes` accepts both;
+`--resume --version VERSION` verifies and dispatches an already pushed matching
+tag without changing Git. A failed dispatch retains the immutable tag.
+
+The compatibility manifest pairs a CLI release with `minimum_mise`,
+`plugin_url`, and the tagged commit's immutable `plugin_revision`. The manual
+`workflow_dispatch` workflow must run at that tag, derives/verifies Cargo's
+version, builds only Linux x86_64 and macOS arm64, emits SHA256 checksums, and
+publishes the manifest and archives. Ordinary pushes and merges do not trigger
+release builds. The manifest is generated as a release asset, not committed
+or read from mutable `main`.

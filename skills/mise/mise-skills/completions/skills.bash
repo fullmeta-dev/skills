@@ -453,7 +453,7 @@ _skills() {
             return 0
             ;;
         skills__subcmd__self__subcmd__update)
-            opts="-h --global --path --env --version --help"
+            opts="-h --global --path --env --version --dry-run --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0

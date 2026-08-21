@@ -73,6 +73,7 @@ complete -c skills -n "__fish_skills_using_subcommand self-update" -l path -d 'U
 complete -c skills -n "__fish_skills_using_subcommand self-update" -l env -d 'Select an environment-specific config' -r
 complete -c skills -n "__fish_skills_using_subcommand self-update" -l version -d 'Install a specific release from the compatibility manifest' -r
 complete -c skills -n "__fish_skills_using_subcommand self-update" -l global -d 'Update the user-owned global mise config (the default)'
+complete -c skills -n "__fish_skills_using_subcommand self-update" -l dry-run -d 'Show the compatible pair and planned changes without installing or editing'
 complete -c skills -n "__fish_skills_using_subcommand self-update" -s h -l help -d 'Print help'
 complete -c skills -n "__fish_skills_using_subcommand doctor" -l env -d 'Select mise\'s environment-specific config (`mise.<env>.toml`)' -r
 complete -c skills -n "__fish_skills_using_subcommand doctor" -l path -d 'Edit this mise config file (or mise.toml inside a directory)' -r -F

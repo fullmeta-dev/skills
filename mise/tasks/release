@@ -1,0 +1,335 @@
+#!/usr/bin/env bash
+#MISE description="Prepare, tag, and dispatch an immutable skills release"
+
+#USAGE flag "-p --patch" help="Increment the patch component"
+#USAGE flag "-m --minor" help="Increment the minor component"
+#USAGE flag "-M --major" help="Increment the major component"
+#USAGE flag "--version <version>" help="Release this exact semver (an optional leading v is removed)"
+#USAGE flag "-y --yes" help="Accept both confirmations"
+#USAGE flag "--resume" help="Dispatch an already pushed matching tag without changing Git"
+#USAGE flag "--publish-existing" help="Alias for --resume"
+#USAGE flag "-h --help" help="Print help"
+
+set -Eeuo pipefail
+
+# mise's usage parser exports usage_* values. Keeping a tiny fallback parser makes
+# this file task directly executable in fake-command tests as well.
+patch="${usage_patch:-false}"
+minor="${usage_minor:-false}"
+major="${usage_major:-false}"
+requested_version="${usage_version:-}"
+yes="${usage_yes:-false}"
+resume="${usage_resume:-false}"
+publish_existing="${usage_publish_existing:-false}"
+help="${usage_help:-false}"
+
+if [[ "$help" == "true" ]]; then
+    mise tasks info "${MISE_TASK_NAME:-release}"
+    exit 0
+fi
+
+if (($# > 0)); then
+    while (($#)); do
+        case "$1" in
+            --patch|-p) patch=true ;;
+            --minor|-m) minor=true ;;
+            --major|-M) major=true ;;
+            --version)
+                (($# >= 2)) || { echo "release: --version requires a value" >&2; exit 2; }
+                requested_version="$2"; shift
+                ;;
+            --version=*) requested_version="${1#*=}" ;;
+            --yes|-y) yes=true ;;
+            --resume) resume=true ;;
+            --publish-existing) publish_existing=true ;;
+            --help|-h)
+                echo "usage: mise run release -- [--patch|--minor|--major|--version VERSION] [--yes] [--resume]"
+                exit 0
+                ;;
+            *) echo "release: unknown argument: $1" >&2; exit 2 ;;
+        esac
+        shift
+    done
+fi
+
+if [[ "$publish_existing" == "true" ]]; then
+    if [[ "$resume" == "true" ]]; then
+        echo "release: --resume and --publish-existing are aliases; use one" >&2
+        exit 2
+    fi
+    resume=true
+fi
+
+bump_count=0
+for choice in "$patch" "$minor" "$major"; do
+    [[ "$choice" == "true" ]] && ((bump_count += 1))
+done
+if [[ -n "$requested_version" && $bump_count -gt 0 ]]; then
+    echo "release: --version is mutually exclusive with --patch, --minor, and --major" >&2
+    exit 2
+fi
+if [[ -z "$requested_version" && $bump_count -eq 0 && "$resume" != "true" ]]; then
+    echo "release: choose exactly one of --patch, --minor, --major, or --version VERSION" >&2
+    exit 2
+fi
+if [[ "$resume" == "true" && $bump_count -gt 0 ]]; then
+    echo "release: --resume cannot be combined with a semantic bump" >&2
+    exit 2
+fi
+
+repo_root="${MISE_PROJECT_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+cargo_manifest="$repo_root/skills/mise/mise-skills/Cargo.toml"
+cargo_lock="$repo_root/skills/mise/mise-skills/Cargo.lock"
+cd "$repo_root"
+
+require_command() {
+    command -v "$1" >/dev/null 2>&1 || {
+        echo "release: required command not found: $1" >&2
+        exit 1
+    }
+}
+require_command git
+require_command cargo
+require_command python3
+require_command gh
+
+# Do not use a committed compatibility file as release input. The workflow
+# generates one from the tagged commit and publishes it as an asset.
+if [[ ! -f "$cargo_manifest" ]]; then
+    echo "release: missing authoritative Cargo manifest: $cargo_manifest" >&2
+    exit 1
+fi
+
+read_cargo_version() {
+    python3 - "$cargo_manifest" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+in_package = False
+for raw in text.splitlines():
+    line = raw.strip()
+    if line.startswith("["):
+        in_package = line == "[package]"
+        continue
+    if in_package:
+        match = re.fullmatch(r'version\s*=\s*["\']([^"\']+)["\']', line)
+        if match:
+            print(match.group(1))
+            break
+else:
+    raise SystemExit("Cargo.toml has no [package].version")
+PY
+}
+
+is_semver() {
+    [[ "$1" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-([0-9A-Za-z-]+\.)*[0-9A-Za-z-]+)?(\+([0-9A-Za-z-]+\.)*[0-9A-Za-z-]+)?$ ]]
+}
+
+normalize_version() {
+    local value="$1"
+    value="${value#v}"
+    is_semver "$value" || {
+        echo "release: invalid semver: $1" >&2
+        exit 2
+    }
+    printf '%s\n' "$value"
+}
+
+current_version="$(read_cargo_version)"
+is_semver "$current_version" || {
+    echo "release: Cargo.toml package version is not valid semver: $current_version" >&2
+    exit 1
+}
+
+if [[ -n "$requested_version" ]]; then
+    version="$(normalize_version "$requested_version")"
+elif [[ "$resume" == "true" ]]; then
+    version="$current_version"
+else
+    IFS=. read -r major_version minor_version patch_version <<<"${current_version%%[-+]*}"
+    case "$bump_count:$patch:$minor:$major" in
+        1:true:false:false) version="$major_version.$minor_version.$((patch_version + 1))" ;;
+        1:false:true:false) version="$major_version.$((minor_version + 1)).0" ;;
+        1:false:false:true) version="$((major_version + 1)).0.0" ;;
+        *) echo "release: choose exactly one release version option" >&2; exit 2 ;;
+    esac
+fi
+is_semver "$version" || { echo "release: calculated version is invalid: $version" >&2; exit 1; }
+tag="v$version"
+
+# Read-only preflight. Fetch and credential checks happen before any tracked
+# file is written, commit is made, tag is created, or remote is pushed.
+if [[ -n "$(git status --porcelain)" ]]; then
+    echo "release: worktree must be clean" >&2
+    exit 1
+fi
+branch="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+[[ "$branch" == "main" ]] || {
+    echo "release: release must run on main (found ${branch:-detached HEAD})" >&2
+    exit 1
+}
+
+git fetch --quiet origin main || {
+    echo "release: cannot fetch origin/main; check Git credentials and network" >&2
+    exit 1
+}
+head_sha="$(git rev-parse HEAD)"
+origin_sha="$(git rev-parse refs/remotes/origin/main)"
+[[ "$head_sha" == "$origin_sha" ]] || {
+    echo "release: HEAD is not origin/main; pull or push main before releasing" >&2
+    exit 1
+}
+
+gh auth status --hostname github.com >/dev/null 2>&1 || {
+    echo "release: GitHub credentials are unavailable (gh auth status failed)" >&2
+    exit 1
+}
+
+remote_tag_sha=""
+set +e
+remote_tag_line="$(git ls-remote --refs origin "refs/tags/$tag" 2>/dev/null)"
+remote_tag_status=$?
+set -e
+if ((remote_tag_status == 0)) && [[ -n "$remote_tag_line" ]]; then
+    remote_tag_sha="${remote_tag_line%%$'\t'*}"
+elif ((remote_tag_status != 0)); then
+    echo "release: cannot inspect remote tag $tag; check Git credentials and network" >&2
+    exit 1
+fi
+
+local_tag_exists=false
+if git rev-parse --verify --quiet "refs/tags/$tag" >/dev/null; then
+    local_tag_exists=true
+fi
+if [[ "$resume" != "true" && ( "$local_tag_exists" == "true" || -n "$remote_tag_sha" ) ]]; then
+    echo "release: tag $tag already exists locally or remotely" >&2
+    exit 1
+fi
+
+if [[ "$resume" == "true" ]]; then
+    [[ -n "$remote_tag_sha" ]] || {
+        echo "release: --resume requires an already pushed remote tag $tag" >&2
+        exit 1
+    }
+    # Fetch the tag into FETCH_HEAD only, then peel annotated tags without
+    # changing local refs. The pushed tag must identify this exact main commit.
+    git fetch --quiet --no-tags origin "refs/tags/$tag" || {
+        echo "release: cannot fetch existing tag $tag for resume verification" >&2
+        exit 1
+    }
+    tag_commit="$(git rev-parse FETCH_HEAD^{commit})"
+    [[ "$tag_commit" == "$head_sha" ]] || {
+        echo "release: remote tag $tag does not point at HEAD/origin/main" >&2
+        exit 1
+    }
+    [[ "$current_version" == "$version" ]] || {
+        echo "release: Cargo.toml version $current_version does not match $tag" >&2
+        exit 1
+    }
+else
+    [[ "$current_version" != "$version" ]] || {
+        echo "release: target version $version is already the Cargo version; choose another bump or --resume" >&2
+        exit 1
+    }
+fi
+
+workflow_command=(gh workflow run release.yml --repo fullmeta-dev/skills --ref "$tag")
+release_commit="Release skills $tag"
+echo "Release plan"
+echo "  repository: $repo_root"
+echo "  current Cargo version: $current_version"
+echo "  release version: $version"
+echo "  tag: $tag"
+if [[ "$resume" == "true" ]]; then
+    echo "  mode: resume/publish existing pushed tag"
+    echo "  action: dispatch workflow at $tag"
+else
+    echo "  action: update Cargo.toml and Cargo.lock, validate, commit $release_commit, create annotated tag, push main and $tag"
+fi
+echo "  dispatch: ${workflow_command[*]}"
+
+confirm() {
+    local prompt="$1"
+    if [[ "$yes" == "true" ]]; then
+        return 0
+    fi
+    local answer
+    read -r -p "$prompt [y/N] " answer || return 1
+    [[ "$answer" =~ ^[Yy]([Ee][Ss])?$ ]]
+}
+
+if [[ "$resume" != "true" ]]; then
+    if ! confirm "Create and push the release commit and annotated tag $tag?"; then
+        echo "release: cancelled before changing files" >&2
+        exit 0
+    fi
+
+    prepared=false
+    committed=false
+    restore_failed_preparation() {
+        if [[ "$prepared" == "true" && "$committed" != "true" ]]; then
+            git restore --source=HEAD --staged --worktree -- "$cargo_manifest" "$cargo_lock" 2>/dev/null || true
+            echo "release: preparation failed; restored Cargo files" >&2
+        fi
+    }
+    trap restore_failed_preparation ERR
+
+    python3 - "$cargo_manifest" "$version" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+version = sys.argv[2]
+text = path.read_text(encoding="utf-8")
+match = re.search(r'(?ms)^(\[package\]\n)(.*?)(?=^\[|\Z)', text)
+if not match:
+    raise SystemExit("Cargo.toml has no [package] table")
+package = match.group(2)
+updated, count = re.subn(
+    r'(?m)^(version\s*=\s*)["\'][^"\']+["\']\s*$',
+    rf'\g<1>"{version}"',
+    package,
+    count=1,
+)
+if count != 1:
+    raise SystemExit("Cargo.toml [package] table has no version")
+path.write_text(text[:match.start(2)] + updated + text[match.end(2):], encoding="utf-8")
+PY
+    prepared=true
+
+    # Cargo is the authority for lockfile refresh. Verify that it changed only
+    # the package version and then validate the package with the refreshed lock.
+    cargo check --manifest-path "$cargo_manifest"
+    cargo test --manifest-path "$cargo_manifest" --locked
+    changed_files="$(git diff --name-only)"
+    expected_files=$'skills/mise/mise-skills/Cargo.lock\nskills/mise/mise-skills/Cargo.toml'
+    if [[ "$changed_files" != "$expected_files" && "$changed_files" != $'skills/mise/mise-skills/Cargo.toml\nskills/mise/mise-skills/Cargo.lock' ]]; then
+        echo "release: version preparation changed unexpected files:" >&2
+        printf '%s\n' "$changed_files" >&2
+        exit 1
+    fi
+    git diff --check
+    git add -- "$cargo_manifest" "$cargo_lock"
+    git commit -m "$release_commit"
+    committed=true
+    trap - ERR
+    git tag -a "$tag" -m "$release_commit"
+    git push origin main
+    git push origin "$tag"
+    echo "release: pushed $release_commit and $tag"
+fi
+
+if ! confirm "Dispatch the external GitHub release workflow for $tag?"; then
+    echo "release: tag $tag is pushed; retry with: mise run release -- --resume --version $version --yes" >&2
+    exit 0
+fi
+
+if ! "${workflow_command[@]}"; then
+    echo "release: dispatch failed; immutable tag $tag was retained" >&2
+    echo "release: retry with: mise run release -- --resume --version $version --yes" >&2
+    exit 1
+fi
+echo "release: dispatched release.yml at $tag"

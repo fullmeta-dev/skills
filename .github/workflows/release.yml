@@ -2,16 +2,6 @@ name: release
 
 on:
   workflow_dispatch:
-    inputs:
-      version:
-        description: Semver release version without the v prefix
-        required: true
-        type: string
-      publish:
-        description: Create the GitHub release after validation
-        required: true
-        default: false
-        type: boolean
 
 permissions:
   contents: write
@@ -29,112 +19,144 @@ jobs:
           - runner: macos-14
             target: aarch64-apple-darwin
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out the dispatched tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+      - name: Derive and verify release version
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${GITHUB_REF_TYPE}" = tag
+          case "${GITHUB_REF_NAME}" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "release must be dispatched at a vX.Y.Z tag (got ${GITHUB_REF_NAME})" >&2; exit 1 ;;
+          esac
+          cargo_version="$(python3 - <<'PY'
+          import tomllib
+          with open('skills/mise/mise-skills/Cargo.toml', 'rb') as stream:
+              print(tomllib.load(stream)['package']['version'])
+          PY
+          )"
+          tag_version="${GITHUB_REF_NAME#v}"
+          test "${cargo_version}" = "${tag_version}" || {
+            echo "Cargo version ${cargo_version} does not match tag ${GITHUB_REF_NAME}" >&2
+            exit 1
+          }
+          tag_sha="$(git rev-parse HEAD)"
+          test "${tag_sha}" = "$(git rev-parse "${GITHUB_REF_NAME}^{commit}")"
+          {
+            echo "RELEASE_VERSION=${cargo_version}"
+            echo "RELEASE_TAG_SHA=${tag_sha}"
+          } >> "${GITHUB_ENV}"
       - name: Build and validate release package
         shell: bash
         run: |
           set -Eeuo pipefail
-          cargo build --release --manifest-path skills/mise/mise-skills/Cargo.toml --target "${{ matrix.target }}"
-          binary="skills/mise/mise-skills/target/${{ matrix.target }}/release/skills"
-          test -x "$binary"
-          mkdir -p dist
-          archive="dist/skills_${{ inputs.version }}_${{ matrix.target }}.tar.gz"
-          tar -C "$(dirname "$binary")" -czf "$archive" "$(basename "$binary")"
-          test "$(tar -tzf "$archive")" = skills
+          bash scripts/package-release.sh "${RELEASE_VERSION}" dist "${{ matrix.target }}"
+          test -f "dist/skills_${RELEASE_VERSION}_${{ matrix.target }}.tar.gz"
       - uses: actions/upload-artifact@v4
         with:
           name: skills-${{ matrix.target }}
-          path: dist/*
+          path: dist/skills_*
           if-no-files-found: error
 
   publish:
-    name: Validate and publish release
+    name: Publish tagged release
     needs: build
-    if: inputs.publish
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out the dispatched tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 0
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
-      - name: Validate compatibility manifest
-        env:
-          RELEASE_VERSION: ${{ inputs.version }}
+      - name: Derive and verify tagged Cargo version
+        shell: bash
         run: |
+          set -Eeuo pipefail
+          test "${GITHUB_REF_TYPE}" = tag
+          case "${GITHUB_REF_NAME}" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "release must be dispatched at a vX.Y.Z tag (got ${GITHUB_REF_NAME})" >&2; exit 1 ;;
+          esac
+          cargo_version="$(python3 - <<'PY'
+          import tomllib
+          with open('skills/mise/mise-skills/Cargo.toml', 'rb') as stream:
+              print(tomllib.load(stream)['package']['version'])
+          PY
+          )"
+          tag_version="${GITHUB_REF_NAME#v}"
+          test "${cargo_version}" = "${tag_version}" || {
+            echo "Cargo version ${cargo_version} does not match tag ${GITHUB_REF_NAME}" >&2
+            exit 1
+          }
+          tag_sha="$(git rev-parse HEAD)"
+          test "${tag_sha}" = "$(git rev-parse "${GITHUB_REF_NAME}^{commit}")"
+          echo "RELEASE_VERSION=${cargo_version}" >> "${GITHUB_ENV}"
+          echo "RELEASE_TAG_SHA=${tag_sha}" >> "${GITHUB_ENV}"
+      - name: Generate immutable compatibility manifest
+        shell: bash
+        run: |
+          set -Eeuo pipefail
           python3 - <<'PY'
           import json
           import os
-          import re
-          import subprocess
-          import tempfile
-          from urllib.parse import urlparse
-
-          manifest = json.load(open('release-compatibility.json', encoding='utf-8'))
-          version = os.environ['RELEASE_VERSION']
-          assert version in manifest['releases'], version
-          release = manifest['releases'][version]
-          plugin_url = release['plugin_url']
-          plugin_revision = release['plugin_revision']
-          parsed = urlparse(plugin_url)
-          assert parsed.scheme == 'https' and parsed.netloc, plugin_url
-          assert not parsed.username and not parsed.password, plugin_url
-          assert not parsed.query and not parsed.fragment, plugin_url
-          assert parsed.path.endswith('.git'), plugin_url
-          assert not any(character.isspace() or ord(character) < 32 for character in plugin_url), plugin_url
-          assert re.fullmatch(r'[0-9a-fA-F]{40}', plugin_revision), plugin_revision
-          subprocess.run(
-              ['git', 'ls-remote', '--exit-code', plugin_url],
-              check=True,
-              capture_output=True,
-              text=True,
-          )
-          with tempfile.TemporaryDirectory() as directory:
-              subprocess.run(['git', 'init', '--quiet', directory], check=True)
-              subprocess.run(
-                  [
-                      'git', '-C', directory, 'fetch', '--quiet', '--no-tags',
-                      '--depth=1', plugin_url, plugin_revision,
-                  ],
-                  check=True,
-                  capture_output=True,
-                  text=True,
-              )
-              subprocess.run(
-                  ['git', '-C', directory, 'cat-file', '-e', f'{plugin_revision}^{{commit}}'],
-                  check=True,
-              )
-          PY
-      - name: Validate release packages
-        env:
-          RELEASE_VERSION: ${{ inputs.version }}
-        run: |
-          python3 - <<'PY'
-          import os
-          import tarfile
           from pathlib import Path
 
           version = os.environ['RELEASE_VERSION']
-          expected = {
-              f'skills_{version}_x86_64-unknown-linux-gnu.tar.gz',
-              f'skills_{version}_aarch64-apple-darwin.tar.gz',
+          tag_sha = os.environ['RELEASE_TAG_SHA']
+          manifest = {
+              'schema_version': 1,
+              'repository': 'fullmeta-dev/skills',
+              'latest': version,
+              'releases': {
+                  version: {
+                      'minimum_mise': '2026.6.14',
+                      'plugin_url': 'https://github.com/fullmeta-dev/skills.git',
+                      'plugin_revision': tag_sha,
+                      'asset_pattern': 'skills_*',
+                  },
+              },
           }
-          actual = {path.name for path in Path('dist').glob('skills_*')}
-          assert actual == expected, (actual, expected)
-          for path in Path('dist').glob('*.tar.gz'):
-              with tarfile.open(path) as archive:
-                  assert archive.getnames() == ['skills'], (path, archive.getnames())
+          Path('dist/release-compatibility.json').write_text(
+              json.dumps(manifest, indent=2) + '\n', encoding='utf-8'
+          )
           PY
-      - name: Checksums
-        run: sha256sum dist/skills_* > dist/SHA256SUMS
+      - name: Validate release assets and checksums
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          expected="skills_${RELEASE_VERSION}_x86_64-unknown-linux-gnu.tar.gz skills_${RELEASE_VERSION}_aarch64-apple-darwin.tar.gz"
+          for asset in ${expected}; do
+            test -f "dist/${asset}"
+            test "$(tar -tzf "dist/${asset}")" = skills
+          done
+          test "$(find dist -maxdepth 1 -type f -name 'skills_*' | wc -l | tr -d ' ')" = 2
+          python3 - "${RELEASE_VERSION}" "${RELEASE_TAG_SHA}" <<'PY'
+          import json
+          import sys
+          with open('dist/release-compatibility.json', encoding='utf-8') as stream:
+              manifest = json.load(stream)
+          version, tag_sha = sys.argv[1:]
+          assert manifest['latest'] == version
+          assert manifest['releases'][version]['plugin_revision'] == tag_sha
+          PY
+          (cd dist && sha256sum skills_* release-compatibility.json > SHA256SUMS)
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ inputs.version }}
-          name: skills v${{ inputs.version }}
+          tag_name: ${{ github.ref_name }}
+          name: skills ${{ github.ref_name }}
           files: |
-            dist/*
-            release-compatibility.json
+            dist/skills_*
+            dist/SHA256SUMS
+            dist/release-compatibility.json

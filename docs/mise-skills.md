@@ -10,16 +10,17 @@ CLI as an ordinary mise tool. The plugin does not need a `[plugins]` entry in
 the selected config:
 
 ```sh
-mise plugins install skills https://github.com/fullmeta-dev/skills.git#<plugin-commit>
-mise use -g github:fullmeta-dev/skills@0.1.0
+mise plugins install skills https://github.com/fullmeta-dev/skills.git#<compatible-plugin-commit>
+mise use --global --pin github:fullmeta-dev/skills@<release>
 ```
 
 ```toml
 [tools."github:fullmeta-dev/skills"]
-version = "0.1.0"
+version = "<release>"
 bin = "skills"
 ```
 
+Mise shell activation is required for the global binary to be on `PATH`.
 Then run:
 
 ```sh
@@ -27,6 +28,10 @@ mise install
 skills use SOURCE SELECTOR... --agent AGENT...
 skills install
 ```
+
+Use `mise which skills` and `command -v skills` to diagnose PATH collisions.
+`skills doctor --global` reports a foreign executable; remediation is an
+explicit user decision and no existing executable is removed automatically.
 
 `skills install` invokes normal `mise install` with an explicit effective
 config path, then directly runs locked sync. It never passes a user-supplied
@@ -48,7 +53,7 @@ skills install [--global|--path PATH|--env ENV] [--locked] [--dry-run]
 skills sync [--global|--path PATH|--env ENV] [--locked]
 skills status [--global|--path PATH|--env ENV] [--json]
 skills upgrade [TOOL...]
-skills self-update [--version VERSION]
+skills self-update [--version VERSION] [--dry-run]
 skills remove [--global|--path PATH|--env ENV] TOOL [SELECTORS...]
 skills prune [--global|--path PATH|--env ENV]
 skills doctor [--global|--path PATH|--env ENV]
@@ -57,11 +62,15 @@ skills doctor [--global|--path PATH|--env ENV]
 `use` edits only the selected config and resolves an immutable `rev:<commit>`
 for Git sources or `tree-<sha256>` for local sources. `track` records update
 intent only. `upgrade` is the explicit source-pin refresh; install, postinstall,
-and sync never follow tracks. `self-update` reads the release compatibility
-manifest, inspects the installed backend in mise's plugin data, and updates the
-CLI/backend pair only after the new CLI is installed. A failed self-update
-leaves the old declaration usable and does not add or rewrite a plugin
-declaration in the selected config.
+and sync never follow tracks. `self-update` queries the latest GitHub release,
+then consumes that release's immutable `release-compatibility.json` asset. It
+inspects the installed backend in mise's plugin data and updates the CLI/backend
+pair only after the new CLI is installed. A failed self-update leaves the old
+declaration usable and does not add or rewrite a plugin declaration in the
+selected config. Set `SKILLS_RELEASE_API` to a local API JSON fixture or
+`SKILLS_COMPATIBILITY_MANIFEST` to a local manifest for deterministic,
+no-network tests. `skills self-update --dry-run` prints the compatible plugin,
+CLI, and config plan without installing or editing.
 
 ## Sources and selectors
 
@@ -109,14 +118,48 @@ on undocumented PATH precedence; use `--accept-collision` only after review.
 `prune` removes stale links recorded for this config and never materializes
 desired links.
 
-## Release compatibility
+## Maintainer release operations
 
-`release-compatibility.json` pairs each CLI release with its minimum mise
-version and exact backend plugin revision. The release workflow builds
-platform assets named `skills_<version>_<target>.*`, checksums them, and can
-publish them only when explicitly enabled. Release publication, tags, and
-live asset verification are deployment steps after review, not performed by
-this checkout.
+The only release entrypoint is the executable mise file task. Run it from a
+clean, current `main`:
+
+```sh
+mise run release -- --patch
+mise run release -- --minor
+mise run release -- --major
+mise run release -- --version 1.4.0
+mise run release -- --minor --yes
+```
+
+`--version` normalizes an optional leading `v` and is mutually exclusive with
+the bump flags. Preflight checks the worktree, branch, `HEAD == origin/main`,
+Git/GitHub credentials, Cargo semver, and local/remote tag availability before
+writing. Without `--yes`, confirmation one creates the Cargo version/lockfile
+change, `Release skills vX.Y.Z` commit, annotated tag, and pushes `main` plus
+the tag. Confirmation two separately dispatches the external workflow.
+
+The workflow is `workflow_dispatch` only and must be dispatched at `vX.Y.Z`.
+It derives and verifies Cargo's version, builds only Linux x86_64
+(`x86_64-unknown-linux-gnu`) and macOS arm64 (`aarch64-apple-darwin`), and
+publishes archives, `SHA256SUMS`, and a generated
+`release-compatibility.json`. That manifest contains the tag commit SHA as the
+immutable plugin revision. Each matrix job consumes an Actions runner; macOS
+arm64 is the costlier/scarcer allowance, so avoid unnecessary dispatches.
+
+If dispatch fails after a tag is pushed, history is retained. Resume only the
+published matching tag without editing or pushing:
+
+```sh
+mise run release -- --resume --version 1.4.0 --yes
+```
+
+The printed `gh workflow run release.yml --repo fullmeta-dev/skills --ref
+vX.Y.Z` command is also the exact retry operation. Tests must use fake
+`git`/`cargo`/`gh` commands and never dispatch a live workflow. After a public
+release exists, the read-only API/assets check is opt-in:
+`RUN_RELEASE_INTEGRATION=1 tests/release_assets_integration.sh`. Ordinary
+pushes and merges never trigger release builds; there is no committed
+compatibility manifest to edit.
 
 For strict Agent Skills diagnostics without blocking normal discovery:
 
