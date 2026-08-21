@@ -421,12 +421,15 @@ pub fn discover_with_subpath(
     let mut candidates = Vec::new();
     let mut seen_roots = HashSet::new();
     for root in roots {
-        let Ok(root) = fs::canonicalize(&root) else {
-            catalog.diagnostics.push(Diagnostic::error(
-                relative_path(&source, &root),
-                "catalog discovery root does not exist",
-            ));
-            continue;
+        let root = match fs::canonicalize(&root) {
+            Ok(root) => root,
+            Err(error) => {
+                catalog.diagnostics.push(Diagnostic::error(
+                    relative_path(&source, &root),
+                    format!("cannot read catalog discovery root: {error}"),
+                ));
+                continue;
+            }
         };
         if !root.starts_with(&source) {
             catalog.diagnostics.push(Diagnostic::error(
@@ -669,11 +672,14 @@ fn discovery_roots(
                 }
             };
             let mut found = false;
-            for entry in WalkDir::new(source)
-                .follow_links(false)
-                .into_iter()
-                .filter_map(Result::ok)
-            {
+            for item in WalkDir::new(source).follow_links(false).into_iter() {
+                let entry = match item {
+                    Ok(entry) => entry,
+                    Err(error) => {
+                        diagnostics.push(traversal_diagnostic(source, source, error));
+                        continue;
+                    }
+                };
                 if !entry.file_type().is_dir() {
                     continue;
                 }
@@ -704,6 +710,23 @@ fn discovery_roots(
     Ok(roots)
 }
 
+fn traversal_diagnostic(source: &Path, fallback: &Path, error: walkdir::Error) -> Diagnostic {
+    let path = error
+        .path()
+        .and_then(|path| relative_path(source, path))
+        .or_else(|| relative_path(source, fallback))
+        .map(|path| if path.is_empty() { ".".into() } else { path });
+    let message = if let Some(io_error) = error.io_error() {
+        format!(
+            "cannot traverse directory: {:?}: {io_error}",
+            io_error.kind()
+        )
+    } else {
+        "cannot traverse directory: filesystem loop detected".into()
+    };
+    Diagnostic::error(path, message)
+}
+
 fn discover_root(
     source: &Path,
     root: &Path,
@@ -716,9 +739,10 @@ fn discover_root(
     let canonical_root = match fs::canonicalize(root) {
         Ok(path) => path,
         Err(error) => {
-            // This is a candidate-root failure rather than a source failure;
-            // the caller has already recorded the missing root when relevant.
-            let _ = error;
+            catalog.diagnostics.push(Diagnostic::error(
+                relative_path(source, root),
+                format!("cannot read discovery root: {error}"),
+            ));
             return;
         }
     };
@@ -743,9 +767,9 @@ fn discover_root(
         let entry = match item {
             Ok(entry) => entry,
             Err(error) => {
-                // WalkDir errors do not have a stable repository path in all
-                // cases. Keep the diagnostic useful without aborting siblings.
-                let _ = error;
+                catalog
+                    .diagnostics
+                    .push(traversal_diagnostic(source, root, error));
                 continue;
             }
         };
@@ -1094,6 +1118,26 @@ mod tests {
             vec!["one", "three"]
         );
         assert!(selected.missing_includes.is_empty());
+    }
+
+    #[test]
+    fn traversal_diagnostics_preserve_relative_path_and_error() {
+        let temp = TempDir::new().unwrap();
+        let source = fs::canonicalize(temp.path()).unwrap();
+        let missing = source.join("missing");
+        let error = WalkDir::new(&missing)
+            .into_iter()
+            .next()
+            .expect("missing root traversal result")
+            .expect_err("missing root should produce a traversal error");
+
+        let diagnostic = traversal_diagnostic(&source, &source, error);
+        assert_eq!(diagnostic.level, DiagnosticLevel::Error);
+        assert_eq!(diagnostic.path.as_deref(), Some("missing"));
+        assert!(diagnostic
+            .message
+            .contains("cannot traverse directory: NotFound:"));
+        assert!(!diagnostic.message.contains(&source.display().to_string()));
     }
 
     #[test]
