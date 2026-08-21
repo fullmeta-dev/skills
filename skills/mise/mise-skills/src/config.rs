@@ -25,6 +25,14 @@ pub struct ToolInfo {
     pub source: String,
     pub version: String,
     pub track: Option<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub subpath: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub include: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclude: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub agents: Vec<String>,
 }
 
 impl Scope {
@@ -145,11 +153,19 @@ pub fn skill_tools(document: &DocumentMut) -> Result<Vec<ToolInfo>, String> {
         let source = string_field(table, "source", key)?;
         let version = string_field(table, "version", key)?;
         let track = optional_string_field(table, "track", key)?;
+        let subpath = tool_subpath(document, key)?;
+        let include = string_array_field(table, "include", key)?;
+        let exclude = string_array_field(table, "exclude", key)?;
+        let agents = string_array_field(table, "agents", key)?;
         result.push(ToolInfo {
             key: key.to_string(),
             source,
             version,
             track,
+            subpath,
+            include,
+            exclude,
+            agents,
         });
     }
     Ok(result)
@@ -240,6 +256,49 @@ pub fn apply_use(
         }
     }
     ensure_postinstall(document)
+}
+
+pub fn remove_tool(
+    document: &mut DocumentMut,
+    key: &str,
+    selectors: &[String],
+) -> Result<bool, String> {
+    let tools = document
+        .get_mut("tools")
+        .and_then(Item::as_table_mut)
+        .ok_or_else(|| "config has no [tools] table".to_string())?;
+    let Some(item) = tools.get_mut(key) else {
+        return Err(format!("skill tool {key:?} is not declared"));
+    };
+    if selectors.is_empty() {
+        tools.remove(key);
+        return Ok(true);
+    }
+    let table = item
+        .as_table_mut()
+        .ok_or_else(|| format!("skill tool {key:?} is not a table"))?;
+    let includes = string_array_field(table, "include", key)?;
+    if includes.is_empty() {
+        return Err(format!(
+            "skill tool {key:?} has no explicit include list; omit selectors to remove it"
+        ));
+    }
+    let original_len = includes.len();
+    let remaining: Vec<String> = includes
+        .into_iter()
+        .filter(|include| !selectors.iter().any(|selector| selector == include))
+        .collect();
+    if remaining.len() == original_len {
+        return Err(format!(
+            "none of the requested selectors are declared for {key}"
+        ));
+    }
+    if remaining.is_empty() {
+        tools.remove(key);
+    } else {
+        table["include"] = string_array(&remaining);
+    }
+    Ok(true)
 }
 
 pub fn update_version(document: &mut DocumentMut, key: &str, version: &str) -> Result<(), String> {
@@ -389,6 +448,28 @@ fn optional_string_field(table: &Table, field: &str, key: &str) -> Result<Option
             .map(|value| Some(value.to_string()))
             .ok_or_else(|| format!("skill tool {key:?} field {field:?} must be a string")),
     }
+}
+
+fn string_array_field(table: &Table, field: &str, key: &str) -> Result<Vec<String>, String> {
+    let Some(item) = table.get(field) else {
+        return Ok(Vec::new());
+    };
+    if let Some(value) = item.as_str() {
+        return Ok(vec![value.to_string()]);
+    }
+    let Some(array) = item.as_array() else {
+        return Err(format!(
+            "skill tool {key:?} field {field:?} must be a string or array"
+        ));
+    };
+    array
+        .iter()
+        .map(|value| {
+            value.as_str().map(ToString::to_string).ok_or_else(|| {
+                format!("skill tool {key:?} field {field:?} must contain only strings")
+            })
+        })
+        .collect()
 }
 
 fn same_source(left: &SourceSpec, right: &SourceSpec) -> bool {

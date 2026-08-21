@@ -1,4 +1,5 @@
 mod config;
+mod lifecycle;
 mod source;
 
 use clap::{Args, CommandFactory, Parser, Subcommand};
@@ -32,8 +33,12 @@ enum Command {
     Upgrade(UpgradeArgs),
     /// Converge the selected configuration without following update tracks.
     Sync(SyncArgs),
-    /// Show declared skill sources and their immutable pins.
+    /// Show declared skill sources and their link state.
     Status(StatusArgs),
+    /// Remove a declaration or selected entries from its include policy.
+    Remove(RemoveArgs),
+    /// Remove stale links recorded for the selected configuration root.
+    Prune(PruneArgs),
 }
 
 #[derive(Debug, Args)]
@@ -55,6 +60,10 @@ impl ScopeArgs {
         } else {
             Scope::Project
         }
+    }
+
+    fn is_global(&self) -> bool {
+        self.global
     }
 }
 
@@ -139,6 +148,22 @@ struct StatusArgs {
     json: bool,
 }
 
+#[derive(Debug, Args)]
+struct RemoveArgs {
+    #[command(flatten)]
+    scope: ScopeArgs,
+    /// Skill tool key, with or without the `skills:` prefix.
+    tool: String,
+    /// Explicit include selectors to remove; omit to remove the whole tool.
+    selectors: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+struct PruneArgs {
+    #[command(flatten)]
+    scope: ScopeArgs,
+}
+
 #[derive(Debug, Serialize)]
 struct ListOutput {
     source: String,
@@ -164,6 +189,8 @@ struct SelectionOutput {
 struct StatusOutput {
     config: String,
     tools: Vec<config::ToolInfo>,
+    links: Vec<lifecycle::LinkStatus>,
+    diagnostics: Vec<String>,
 }
 
 fn main() -> ExitCode {
@@ -186,6 +213,8 @@ fn main() -> ExitCode {
         Command::Upgrade(args) => run_upgrade(args),
         Command::Sync(args) => run_sync(args),
         Command::Status(args) => run_status(args),
+        Command::Remove(args) => run_remove(args),
+        Command::Prune(args) => run_prune(args),
     }
 }
 
@@ -259,6 +288,9 @@ fn use_command(args: UseArgs) -> Result<(String, String, PathBuf), String> {
     let mut config = Config::load(&args.scope.scope())?;
     let before = config.document.to_string();
     let subpath = validate_subpath(args.subpath.as_deref())?;
+    for agent in &args.agents {
+        lifecycle::validate_agent(agent)?;
+    }
     let source = SourceSpec::parse(&args.source, &config.root)?;
 
     let (version, track) = if args.locked {
@@ -370,17 +402,15 @@ fn upgrade_command(args: UpgradeArgs) -> Result<(usize, PathBuf), String> {
 
 fn run_sync(args: SyncArgs) -> ExitCode {
     match Config::load(&args.scope.scope()).and_then(|config| {
-        let tools = config::skill_tools(&config.document)?;
-        // Sync is deliberately locked: activation/materialization is owned by
-        // the following lifecycle issue, while this command makes the
-        // generated postinstall hook safe and forward-compatible today.
-        if args.locked {
-            println!("checked {} immutable skill source(s)", tools.len());
-        } else {
-            println!(
-                "checked {} skill source(s); use upgrade to refresh pins",
-                tools.len()
-            );
+        let report = lifecycle::sync(&config, args.scope.is_global())?;
+        println!(
+            "synced {} link(s), removed {} link(s) in {}",
+            report.linked,
+            report.removed,
+            config.path.display()
+        );
+        for conflict in report.conflicts {
+            eprintln!("warning: {conflict}");
         }
         Ok(())
     }) {
@@ -391,9 +421,12 @@ fn run_sync(args: SyncArgs) -> ExitCode {
 
 fn run_status(args: StatusArgs) -> ExitCode {
     match Config::load(&args.scope.scope()).and_then(|config| {
+        let lifecycle = lifecycle::status(&config, args.scope.is_global())?;
         let output = StatusOutput {
             config: config.path.display().to_string(),
             tools: config::skill_tools(&config.document)?,
+            links: lifecycle.links,
+            diagnostics: lifecycle.diagnostics,
         };
         if args.json {
             println!(
@@ -404,6 +437,64 @@ fn run_status(args: StatusArgs) -> ExitCode {
             for tool in &output.tools {
                 println!("{}\t{}", tool.key, tool.version);
             }
+            for link in &output.links {
+                println!(
+                    "{}\t{}\t{}\t{}",
+                    link.adapter, link.skill, link.state, link.target
+                );
+            }
+            for diagnostic in &output.diagnostics {
+                eprintln!("warning: {diagnostic}");
+            }
+        }
+        Ok(())
+    }) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => fail(error),
+    }
+}
+
+fn run_remove(args: RemoveArgs) -> ExitCode {
+    match remove_command(args) {
+        Ok((removed, path)) => {
+            if removed {
+                println!("removed skill declaration(s) in {}", path.display());
+            } else {
+                println!("no skill declaration changed in {}", path.display());
+            }
+            ExitCode::SUCCESS
+        }
+        Err(error) => fail(error),
+    }
+}
+
+fn remove_command(args: RemoveArgs) -> Result<(bool, PathBuf), String> {
+    let mut config = Config::load(&args.scope.scope())?;
+    let before = config.document.to_string();
+    let key = if args.tool.starts_with("skills:") {
+        args.tool
+    } else {
+        format!("skills:{}", args.tool)
+    };
+    config::remove_tool(&mut config.document, &key, &args.selectors)?;
+    config.save_if_changed(&before)?;
+    let report = lifecycle::sync(&config, args.scope.is_global())?;
+    for conflict in report.conflicts {
+        eprintln!("warning: {conflict}");
+    }
+    Ok((before != config.document.to_string(), config.path))
+}
+
+fn run_prune(args: PruneArgs) -> ExitCode {
+    match Config::load(&args.scope.scope()).and_then(|config| {
+        let report = lifecycle::prune(&config, args.scope.is_global())?;
+        println!(
+            "pruned {} stale link(s) in {}",
+            report.removed,
+            config.path.display()
+        );
+        for conflict in report.conflicts {
+            eprintln!("warning: {conflict}");
         }
         Ok(())
     }) {
