@@ -11,13 +11,21 @@ Prerequisites: [mise](https://mise.jdx.dev/) **2026.6.14 or newer**, Git, and
 one supported agent. The bootstrap hook needs the minimum release's
 `bootstrap.hooks.pre-tools` phase.
 
-Install the released CLI in the global mise configuration, then bootstrap the
-pinned backend and CLI:
+Install the pinned global config, backend plugin, and released CLI in one
+copy-pasteable bootstrap. The script writes the checked-in config artifact
+(`docs/mise-skills-bootstrap.toml`), installs its idempotent pre-tools helper,
+and runs real `mise bootstrap`:
 
 ```sh
-mise use --global github:fullmeta-dev/skills@0.1.0
-mise bootstrap
+curl --fail --location https://raw.githubusercontent.com/fullmeta-dev/skills/fb2eecb5da7e6670e4cf018ec7b3c5e9de7a24d7/skills/mise/bootstrap.sh | bash
 ```
+
+For an offline or reviewed setup, copy [`docs/mise-skills-bootstrap.toml`](docs/mise-skills-bootstrap.toml)
+to `$MISE_CONFIG_DIR/config.toml` and
+[`skills/mise/bootstrap-plugin.sh`](skills/mise/bootstrap-plugin.sh) to
+`$MISE_CONFIG_DIR/mise-skills-bootstrap-plugin.sh`, then run `mise bootstrap`.
+The config pins both the plugin declaration and CLI release; rerunning the
+helper is a no-op when that exact plugin URL and revision are installed.
 
 For a project, choose a source, selectors, and adapters. The CLI resolves the
 latest branch or tag to a full immutable pin; do not calculate a `tree-` or

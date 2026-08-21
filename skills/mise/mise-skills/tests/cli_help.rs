@@ -27,7 +27,15 @@ fn documented_commands_have_scope_failure_and_example_help() {
     }
 
     for command in [
-        "list", "use", "sync", "status", "upgrade", "remove", "prune",
+        "list",
+        "use",
+        "sync",
+        "status",
+        "upgrade",
+        "remove",
+        "prune",
+        "validate",
+        "completions",
     ] {
         let output = run(temp.path(), &[command, "--help"]);
         assert!(output.status.success(), "{command} --help failed");
@@ -39,6 +47,32 @@ fn documented_commands_have_scope_failure_and_example_help() {
             );
         }
     }
+}
+
+#[test]
+fn generated_completions_match_checked_in_artifacts() {
+    let temp = TempDir::new().unwrap();
+    for (shell, relative_path) in [
+        ("bash", "completions/mise-skills.bash"),
+        ("zsh", "completions/_mise-skills"),
+        ("fish", "completions/mise-skills.fish"),
+        ("powershell", "completions/mise-skills.ps1"),
+    ] {
+        let output = run(temp.path(), &["completions", shell]);
+        assert!(
+            output.status.success(),
+            "completion generation failed: {shell}"
+        );
+        let expected = fs::read(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join(relative_path),
+        )
+        .expect("checked-in completion artifact");
+        assert_eq!(
+            output.stdout, expected,
+            "checked-in completion is stale: {shell}"
+        );
+    }
+    assert!(!temp.path().join("mise.toml").exists());
 }
 
 #[test]
@@ -61,6 +95,27 @@ fn shipped_completion_shells_are_generated_without_side_effects() {
         );
     }
     assert!(!temp.path().join("mise.toml").exists());
+}
+
+#[test]
+fn bootstrap_artifact_declares_the_complete_global_flow() {
+    let artifact = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../docs/mise-skills-bootstrap.toml"),
+    )
+    .expect("global mise bootstrap artifact");
+    for required in [
+        "[plugins]",
+        "vfox-backend:skills",
+        "#fb2eecb5da7e6670e4cf018ec7b3c5e9de7a24d7",
+        "[tools.\"github:fullmeta-dev/skills\"]",
+        "bin = \"mise-skills\"",
+        "[tasks.skills]",
+        "usage_arguments",
+        "[bootstrap.hooks.pre-tools]",
+        "mise-skills-bootstrap-plugin.sh",
+    ] {
+        assert!(artifact.contains(required), "bootstrap artifact missing {required}");
+    }
 }
 
 #[test]

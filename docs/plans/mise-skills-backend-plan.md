@@ -78,7 +78,7 @@ it through a normal task:
 [tasks.skills]
 description = "Manage Agent Skills"
 dir = "{{cwd}}"
-run = "mise-skills"
+run = "mise-skills ${usage_arguments-}"
 raw = true
 ```
 

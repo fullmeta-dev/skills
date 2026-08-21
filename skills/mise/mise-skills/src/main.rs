@@ -77,7 +77,7 @@ enum Command {
     /// Generate a completion script for one supported shell.
     #[command(
         visible_alias = "completion",
-        after_help = "Normal: writes a completion script to stdout and never edits config or contacts a source. Failure: unsupported shells are rejected before output. Example: mise run skills -- completions bash > ~/.local/share/bash-completion/completions/mise-skills"
+        after_help = "Normal: writes a completion script to stdout and never edits config or contacts a source. Failure: unsupported shells are rejected before output. Scope: shell argument only; no project or global config is read. Example: mise run skills -- completions bash > ~/.local/share/bash-completion/completions/mise-skills"
     )]
     Completions(CompletionsArgs),
 }

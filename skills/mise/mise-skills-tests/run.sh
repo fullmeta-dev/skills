@@ -414,7 +414,7 @@ PY
 
 [tasks.skills]
 dir = "{{cwd}}"
-run = "mise-skills"
+run = "mise-skills \${usage_arguments-}"
 raw = true
 EOF
     cat > mise.toml <<'EOF'

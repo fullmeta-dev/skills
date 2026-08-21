@@ -24,7 +24,7 @@ usage = '''
 arg "[arguments]" var=#true help="mise-skills command and arguments"
 '''
 dir = "{{cwd}}"
-run = "mise-skills"
+run = "mise-skills ${usage_arguments-}"
 raw = true
 ```
 
