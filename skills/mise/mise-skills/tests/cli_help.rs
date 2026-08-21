@@ -63,10 +63,8 @@ fn generated_completions_match_checked_in_artifacts() {
             output.status.success(),
             "completion generation failed: {shell}"
         );
-        let expected = fs::read(
-            Path::new(env!("CARGO_MANIFEST_DIR")).join(relative_path),
-        )
-        .expect("checked-in completion artifact");
+        let expected = fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join(relative_path))
+            .expect("checked-in completion artifact");
         assert_eq!(
             output.stdout, expected,
             "checked-in completion is stale: {shell}"
@@ -114,7 +112,10 @@ fn bootstrap_artifact_declares_the_complete_global_flow() {
         "[bootstrap.hooks.pre-tools]",
         "mise-skills-bootstrap-plugin.sh",
     ] {
-        assert!(artifact.contains(required), "bootstrap artifact missing {required}");
+        assert!(
+            artifact.contains(required),
+            "bootstrap artifact missing {required}"
+        );
     }
 }
 
