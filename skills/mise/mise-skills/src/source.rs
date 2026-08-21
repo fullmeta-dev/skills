@@ -518,7 +518,11 @@ fn validate_github(value: &str) -> Result<(), String> {
 }
 
 fn validate_git(value: &str) -> Result<(), String> {
-    if value.is_empty() || value.contains(['\0', '\n', '\r', '#']) || value.starts_with('-') {
+    if value.is_empty()
+        || value.contains(['\0', '\n', '\r', '#'])
+        || value.chars().any(char::is_whitespace)
+        || value.starts_with('-')
+    {
         return Err(
             "Git source must be a URL or SCP-style SSH address without a ref fragment".into(),
         );

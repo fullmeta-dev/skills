@@ -8,8 +8,8 @@ use clap_complete::{
     shells::{Bash, Fish, PowerShell, Zsh},
 };
 use config::{Config, Scope};
-use mise_skills::{discover_with_subpath, DiagnosticLevel, Explain, Selection, Skill};
 use serde::Serialize;
+use skills::{discover_with_subpath, DiagnosticLevel, Explain, Selection, Skill};
 use source::{
     canonical_version, local_pin, resolve_git_pin, validate_subpath, SourceKind, SourceSpec,
 };
@@ -20,11 +20,11 @@ use std::process::{Command as ProcessCommand, ExitCode};
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "mise-skills",
+    name = "skills",
     version,
     about = "Discover and manage Agent Skills from immutable source snapshots",
-    long_about = "Discover and manage Agent Skills from immutable source snapshots. Choose a friendly source and selectors; mise-skills resolves an immutable pin, while only upgrade follows an explicit track.",
-    after_help = "Normal behavior: list is read-only; use, upgrade, and remove edit the selected mise config; sync and prune only touch links owned by that config root. Failures are reported on stderr with a non-zero exit status and leave unrelated files untouched.\n\nScope: project is the default; use --global for the user config or --path PATH for one config file.\n\nExamples:\n  mise run skills -- list path:../skills-source --json\n  mise run skills -- use fullmeta-dev/skills code-review --agent pi\n  mise run skills -- sync --locked\n  mise run skills -- status --json\n  mise run skills -- completions bash"
+    long_about = "Discover and manage Agent Skills from immutable source snapshots. Choose a friendly source and selectors; skills resolves an immutable pin, while only upgrade follows an explicit track.",
+    after_help = "Normal behavior: list is read-only; use, upgrade, and remove edit the selected mise config; install, sync, and prune only touch links owned by that config root. Failures are reported on stderr with a non-zero exit status and leave unrelated files untouched.\n\nScope: project is the default; use --global, --path PATH, or --env ENV to select a config.\n\nExamples:\n  skills list path:../skills-source --json\n  skills use fullmeta-dev/skills code-review --agent pi\n  skills install\n  skills sync --locked\n  skills status --json\n  skills completions bash"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -35,55 +35,74 @@ struct Cli {
 enum Command {
     /// List discovered skills, optionally applying selectors.
     #[command(
-        after_help = "Normal: reads the local source and prints selected skills; missing selectors are warnings, not failures. Failure: malformed source data, unsafe links, or discovery errors return non-zero without editing files. Scope: source and optional --subpath only; no mise config is read. Example: mise run skills -- list path:../skills-source --include tag:web --tree"
+        after_help = "Normal: reads the local source and prints selected skills; missing selectors are warnings, not failures. Failure: malformed source data, unsafe links, or discovery errors return non-zero without editing files. Scope: source and optional --subpath only; no mise config is read. Example: skills list path:../skills-source --include tag:web --tree"
     )]
     List(ListArgs),
     /// Declare a source and selected skills, resolving its immutable pin.
     #[command(
-        after_help = "Normal: writes a source declaration, selectors, agents, and a postinstall sync hook to the selected mise config. Git sources resolve a full commit; local sources resolve a tree pin. Failure: invalid source, selector policy, agent, ref, or config leaves the file unchanged. Scope: project by default, or --global/--path. Example: mise run skills -- use fullmeta-dev/skills code-review --agent pi --agent claude"
+        after_help = "Normal: writes a source declaration, selectors, agents, and a direct postinstall sync hook to the selected mise config. Git sources resolve a full commit; local sources resolve a tree pin. Failure: invalid source, selector policy, agent, ref, or config leaves the file unchanged. Scope: project by default, or --global/--path/--env. Example: skills use fullmeta-dev/skills code-review --agent pi --agent claude"
     )]
     Use(UseArgs),
     /// Refresh immutable pins for declared sources. This never installs or syncs.
     #[command(
-        after_help = "Normal: resolves each declared source's explicit track and changes only its immutable version. Without --locked, this is the only command that follows track. Failure: an undeclared tool, invalid source, or unavailable ref returns non-zero and does not install or sync. Scope: project by default, or --global/--path. Example: mise run skills -- upgrade skills:fullmeta-dev/skills"
+        after_help = "Normal: resolves each declared source's explicit track and changes only its immutable version. Without --locked, this is the only command that follows track. Failure: an undeclared tool, invalid source, or unavailable ref returns non-zero and does not install or sync. Scope: project by default, or --global/--path/--env. Example: skills upgrade skills:fullmeta-dev/skills"
     )]
     Upgrade(UpgradeArgs),
+    /// Install selected configuration tools through normal mise, then sync links.
+    #[command(
+        after_help = "Normal: runs mise install against only the selected config and then directly runs locked sync. Failure: the selected config is left unchanged and unmanaged targets are untouched. Scope: project by default, or --global/--path/--env. Example: skills install --env development"
+    )]
+    Install(InstallArgs),
+    /// Update the CLI and its compatible backend as one safe pair.
+    #[command(
+        name = "self-update",
+        after_help = "Normal: reads the release compatibility manifest, installs the selected CLI release, updates its pinned backend, and commits config only after both succeed. Failure: the old config and backend declaration remain usable. Scope: global by default, or --path/--env. Example: skills self-update"
+    )]
+    SelfUpdate(SelfUpdateArgs),
+    /// Diagnose executable collisions and selected mise ownership.
+    #[command(
+        after_help = "Normal: reports PATH and mise ownership for the public skills executable without changing files. Failure: unavailable inspection commands are reported. Scope: selected project/global mise config. Example: skills doctor --global"
+    )]
+    Doctor(DoctorArgs),
     /// Converge the selected configuration without following update tracks.
     #[command(
-        after_help = "Normal: verifies installed immutable artifacts and repairs only links owned by this config root; --locked forbids version resolution. Failure: missing artifacts, local drift, unsafe links, or conflicts are reported and unmanaged targets remain untouched. Scope: project by default, or --global/--path. Example: mise run skills -- sync --locked"
+        after_help = "Normal: verifies installed immutable artifacts and repairs only links owned by this config root; --locked forbids version resolution. Failure: missing artifacts, local drift, unsafe links, or conflicts are reported and unmanaged targets remain untouched. Scope: project by default, or --global/--path/--env. Example: skills sync --locked"
     )]
     Sync(SyncArgs),
     /// Show declared skill sources and their link state.
     #[command(
-        after_help = "Normal: reports declarations, immutable versions, and active, missing, dangling, or conflicting links without changing files. Failure: invalid config data returns non-zero. Scope: project by default, or --global/--path. Example: mise run skills -- status --global --json"
+        after_help = "Normal: reports declarations, immutable versions, and active, missing, dangling, or conflicting links without changing files. Failure: invalid config data returns non-zero. Scope: project by default, or --global/--path/--env. Example: skills status --global --json"
     )]
     Status(StatusArgs),
     /// Remove a declaration or selected entries from its include policy.
     #[command(
-        after_help = "Normal: removes selected includes or the whole declaration, syncs owned links, and delegates normal mise artifact removal only when unreferenced. Failure: unknown tools, selectors, or changed unmanaged links are reported without deleting unrelated targets. Scope: project by default, or --global/--path. Example: mise run skills -- remove skills:fullmeta-dev/skills code-review"
+        after_help = "Normal: removes selected includes or the whole declaration, syncs owned links, and delegates normal mise artifact removal only when unreferenced. Failure: unknown tools, selectors, or changed unmanaged links are reported without deleting unrelated targets. Scope: project by default, or --global/--path/--env. Example: skills remove skills:fullmeta-dev/skills code-review"
     )]
     Remove(RemoveArgs),
     /// Remove stale links recorded for the selected configuration root.
     #[command(
-        after_help = "Normal: removes only stale links recorded for this config root and never materializes desired links. Failure: changed or unmanaged targets are reported and left untouched. Scope: project by default, or --global/--path. Example: mise run skills -- prune --global"
+        after_help = "Normal: removes only stale links recorded for this config root and never materializes desired links. Failure: changed or unmanaged targets are reported and left untouched. Scope: project by default, or --global/--path/--env. Example: skills prune --global"
     )]
     Prune(PruneArgs),
     /// Report strict Agent Skills conformance without blocking normal use.
     #[command(
         visible_alias = "check",
-        after_help = "Normal: prints non-blocking diagnostics for strict Agent Skills consumers; the intentional top-level tags extension is reported but remains valid for normal discovery and installation. Failure: unreadable sources or ordinary discovery errors return non-zero. Scope: source and optional --subpath only; no config, network, or installation side effects. Example: mise run skills -- validate path:../skills-source --json"
+        after_help = "Normal: prints non-blocking diagnostics for strict Agent Skills consumers; the intentional top-level tags extension is reported but remains valid for normal discovery and installation. Failure: unreadable sources or ordinary discovery errors return non-zero. Scope: source and optional --subpath only; no config, network, or installation side effects. Example: skills validate path:../skills-source --json"
     )]
     Validate(ValidateArgs),
     /// Generate a completion script for one supported shell.
     #[command(
         visible_alias = "completion",
-        after_help = "Normal: writes a completion script to stdout and never edits config or contacts a source. Failure: unsupported shells are rejected before output. Scope: shell argument only; no project or global config is read. Example: mise run skills -- completions bash > ~/.local/share/bash-completion/completions/mise-skills"
+        after_help = "Normal: writes a completion script to stdout and never edits config or contacts a source. Failure: unsupported shells are rejected before output. Scope: shell argument only; no project or global config is read. Example: skills completions bash > ~/.local/share/bash-completion/completions/skills"
     )]
     Completions(CompletionsArgs),
 }
 
 #[derive(Debug, Args)]
 struct ScopeArgs {
+    /// Select mise's environment-specific config (`mise.<env>.toml`).
+    #[arg(long, env = "MISE_ENV", value_name = "ENV")]
+    env: Option<String>,
     /// Edit the user-owned global mise config.
     #[arg(long, conflicts_with = "path")]
     global: bool,
@@ -94,6 +113,10 @@ struct ScopeArgs {
 
 impl ScopeArgs {
     fn scope(&self) -> Scope {
+        if let Some(environment) = &self.env {
+            config::validate_environment_name(environment).expect("clap validates environment");
+            std::env::set_var("MISE_ENV", environment);
+        }
         if self.global {
             Scope::Global
         } else if let Some(path) = &self.path {
@@ -172,6 +195,60 @@ struct UpgradeArgs {
 }
 
 #[derive(Debug, Args)]
+struct InstallArgs {
+    #[command(flatten)]
+    scope: ScopeArgs,
+    /// Require mise's existing lockfile data without resolving tool URLs.
+    #[arg(long)]
+    locked: bool,
+    /// Show normal mise installation work without changing files.
+    #[arg(long)]
+    dry_run: bool,
+    /// Explicitly accept an unrelated existing `skills` executable.
+    #[arg(long)]
+    accept_collision: bool,
+}
+
+#[derive(Debug, Args)]
+struct SelfUpdateArgs {
+    /// Update the global config by default, or select one config with --path.
+    #[command(flatten)]
+    scope: SelfUpdateScopeArgs,
+    /// Install a specific release from the compatibility manifest.
+    #[arg(long, value_name = "VERSION")]
+    version: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct SelfUpdateScopeArgs {
+    /// Update the user-owned global mise config (the default).
+    #[arg(long, conflicts_with = "path")]
+    global: bool,
+    /// Update this mise config file.
+    #[arg(long, value_name = "PATH", conflicts_with = "global")]
+    path: Option<PathBuf>,
+    /// Select an environment-specific config.
+    #[arg(long, env = "MISE_ENV", value_name = "ENV")]
+    env: Option<String>,
+}
+
+impl SelfUpdateScopeArgs {
+    fn scope(&self) -> Scope {
+        if let Some(environment) = &self.env {
+            config::validate_environment_name(environment).expect("clap validates environment");
+            std::env::set_var("MISE_ENV", environment);
+        }
+        self.path.clone().map(Scope::Path).unwrap_or(Scope::Global)
+    }
+}
+
+#[derive(Debug, Args)]
+struct DoctorArgs {
+    #[command(flatten)]
+    scope: ScopeArgs,
+}
+
+#[derive(Debug, Args)]
 struct SyncArgs {
     #[command(flatten)]
     scope: ScopeArgs,
@@ -227,16 +304,16 @@ struct CompletionsArgs {
 #[derive(Debug, Serialize)]
 struct ValidateOutput {
     source: String,
-    diagnostics: Vec<mise_skills::Diagnostic>,
+    diagnostics: Vec<skills::Diagnostic>,
 }
 
 #[derive(Debug, Serialize)]
 struct ListOutput {
     source: String,
-    catalog: mise_skills::CatalogSummary,
+    catalog: skills::CatalogSummary,
     skills: Vec<Skill>,
-    shadowed: Vec<mise_skills::ShadowedSkill>,
-    diagnostics: Vec<mise_skills::Diagnostic>,
+    shadowed: Vec<skills::ShadowedSkill>,
+    diagnostics: Vec<skills::Diagnostic>,
     selection: SelectionOutput,
     #[serde(skip_serializing_if = "Option::is_none")]
     explain: Option<Explain>,
@@ -248,12 +325,13 @@ struct SelectionOutput {
     excluded: Vec<String>,
     missing_includes: Vec<String>,
     missing_excludes: Vec<String>,
-    selector_resolutions: Vec<mise_skills::SelectorResolution>,
+    selector_resolutions: Vec<skills::SelectorResolution>,
 }
 
 #[derive(Debug, Serialize)]
 struct StatusOutput {
     config: String,
+    environment: String,
     tools: Vec<config::ToolInfo>,
     links: Vec<lifecycle::LinkStatus>,
     diagnostics: Vec<String>,
@@ -263,8 +341,7 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     let Some(command) = cli.command else {
         // Clap's generated help is intentionally the only output for a bare
-        // invocation; task `--help` is also side-effect free, while CLI help
-        // is invoked as `mise run skills -- --help` when task usage is present.
+        // invocation and is always side-effect free.
         let mut command = Cli::command();
         if let Err(error) = command.print_help() {
             eprintln!("{error}");
@@ -278,6 +355,9 @@ fn main() -> ExitCode {
         Command::List(args) => run_list(args),
         Command::Use(args) => run_use(args),
         Command::Upgrade(args) => run_upgrade(args),
+        Command::Install(args) => run_install(args),
+        Command::SelfUpdate(args) => run_self_update(args),
+        Command::Doctor(args) => run_doctor(args),
         Command::Sync(args) => run_sync(args),
         Command::Status(args) => run_status(args),
         Command::Remove(args) => run_remove(args),
@@ -399,10 +479,10 @@ fn run_completions(args: CompletionsArgs) -> ExitCode {
     let mut command = Cli::command();
     let mut stdout = io::stdout();
     match args.shell.as_str() {
-        "bash" => generate(Bash, &mut command, "mise-skills", &mut stdout),
-        "zsh" => generate(Zsh, &mut command, "mise-skills", &mut stdout),
-        "fish" => generate(Fish, &mut command, "mise-skills", &mut stdout),
-        "powershell" => generate(PowerShell, &mut command, "mise-skills", &mut stdout),
+        "bash" => generate(Bash, &mut command, "skills", &mut stdout),
+        "zsh" => generate(Zsh, &mut command, "skills", &mut stdout),
+        "fish" => generate(Fish, &mut command, "skills", &mut stdout),
+        "powershell" => generate(PowerShell, &mut command, "skills", &mut stdout),
         _ => unreachable!("shell is constrained by clap"),
     }
     ExitCode::SUCCESS
@@ -534,6 +614,429 @@ fn upgrade_command(args: UpgradeArgs) -> Result<(usize, PathBuf), String> {
     Ok((changed, config.path))
 }
 
+fn run_install(args: InstallArgs) -> ExitCode {
+    let scope = args.scope.scope();
+    match Config::load(&scope).and_then(|config| {
+        let collisions = collision_diagnostics(&config);
+        if !collisions.is_empty() && !args.accept_collision {
+            return Err(format!(
+                "refusing to install because the public skills executable is shadowed:\n{}\nuse --accept-collision only after inspecting the owners",
+                collisions.join("\n")
+            ));
+        }
+        for collision in collisions {
+            eprintln!("warning: {collision}");
+        }
+        let output = run_normal_mise_install(&config, args.locked, args.dry_run)?;
+        if !output.trim().is_empty() {
+            print!("{output}");
+        }
+        if args.dry_run {
+            return Ok(());
+        }
+        let report = lifecycle::sync(&config, args.scope.is_global())?;
+        println!(
+            "installed selected mise tools and synced {} link(s), removed {} link(s) in {}",
+            report.linked,
+            report.removed,
+            config.path.display()
+        );
+        for conflict in report.conflicts {
+            eprintln!("warning: {conflict}");
+        }
+        Ok(())
+    }) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => fail(error),
+    }
+}
+
+fn run_doctor(args: DoctorArgs) -> ExitCode {
+    let scope = args.scope.scope();
+    match Config::load(&scope).map(|config| {
+        println!("config: {}", config.path.display());
+        println!(
+            "environment: {}",
+            std::env::var("MISE_ENV").unwrap_or_else(|_| "default".into())
+        );
+        let collisions = collision_diagnostics(&config);
+        if collisions.is_empty() {
+            println!("skills executable: no unrelated owner detected");
+        } else {
+            for collision in collisions {
+                println!("{collision}");
+            }
+        }
+    }) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => fail(error),
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct CompatibilityManifest {
+    schema_version: u32,
+    latest: Option<String>,
+    releases: std::collections::BTreeMap<String, CompatibilityRelease>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct CompatibilityRelease {
+    minimum_mise: String,
+    plugin_url: String,
+    plugin_revision: String,
+}
+
+fn run_self_update(args: SelfUpdateArgs) -> ExitCode {
+    match self_update_command(args) {
+        Ok((version, path)) => {
+            println!(
+                "updated skills CLI and backend to {version} in {}",
+                path.display()
+            );
+            ExitCode::SUCCESS
+        }
+        Err(error) => fail(error),
+    }
+}
+
+fn self_update_command(args: SelfUpdateArgs) -> Result<(String, PathBuf), String> {
+    let scope = args.scope.scope();
+    let mut config = Config::load(&scope)?;
+    let before = config.document.to_string();
+    let manifest = load_compatibility_manifest()?;
+    if manifest.schema_version != 1 {
+        return Err(format!(
+            "unsupported release compatibility manifest schema {}",
+            manifest.schema_version
+        ));
+    }
+    let version = args
+        .version
+        .or(manifest.latest.clone())
+        .or_else(|| {
+            manifest
+                .releases
+                .keys()
+                .max_by(|left, right| compare_versions(left, right))
+                .cloned()
+        })
+        .ok_or_else(|| "release compatibility manifest contains no releases".to_string())?;
+    if version.is_empty()
+        || version.starts_with('-')
+        || !version
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '.' | '-'))
+    {
+        return Err("release version must be a safe semver-like value".into());
+    }
+    let release = manifest
+        .releases
+        .get(&version)
+        .ok_or_else(|| format!("release {version:?} is absent from the compatibility manifest"))?;
+    require_mise_version(&release.minimum_mise)?;
+    if release.plugin_url.is_empty()
+        || release.plugin_url.starts_with('-')
+        || release.plugin_url.contains(['\0', '\n', '\r'])
+        || release.plugin_url.chars().any(char::is_whitespace)
+        || release.plugin_revision.is_empty()
+        || !release
+            .plugin_revision
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+    {
+        return Err("compatibility manifest contains an unsafe backend pin".into());
+    }
+
+    let cli_key = "github:fullmeta-dev/skills";
+    let tools = config
+        .document
+        .get("tools")
+        .and_then(toml_edit::Item::as_table)
+        .ok_or_else(|| "selected config has no [tools] table".to_string())?;
+    let cli = tools
+        .get(cli_key)
+        .ok_or_else(|| format!("selected config does not declare {cli_key:?}"))?;
+    if cli.as_str().is_some() {
+        return Err(format!(
+            "CLI declaration {cli_key:?} must be a table with bin = \\\"skills\\\""
+        ));
+    }
+    let cli_table = cli
+        .as_table()
+        .ok_or_else(|| format!("CLI declaration {cli_key:?} must be a table"))?;
+    if cli_table.get("bin").and_then(toml_edit::Item::as_str) != Some("skills") {
+        return Err(format!(
+            "CLI declaration {cli_key:?} must expose bin = \\\"skills\\\""
+        ));
+    }
+    let old_plugin = config
+        .document
+        .get("plugins")
+        .and_then(toml_edit::Item::as_table)
+        .and_then(|plugins| plugins.get("vfox-backend:skills"))
+        .and_then(toml_edit::Item::as_str)
+        .map(ToString::to_string)
+        .ok_or_else(|| "selected config does not declare vfox-backend:skills".to_string())?;
+
+    let collisions = collision_diagnostics(&config);
+    if !collisions.is_empty() {
+        return Err(format!(
+            "refusing self-update due to executable collision:\\n{}",
+            collisions.join("\\n")
+        ));
+    }
+
+    // Install the new executable first, without mutating the selected config.
+    // This keeps the currently running binary and old declaration usable when
+    // a download, backend update, or compatibility check fails.
+    let install = run_normal_mise_install_at(
+        &config,
+        &[format!("github:fullmeta-dev/skills@{version}")],
+        false,
+        false,
+    )?;
+    if !install.status.success() {
+        return Err(process_failure("mise install", &install));
+    }
+
+    let new_plugin = format!("{}#{}", release.plugin_url, release.plugin_revision);
+    if let Err(error) = install_plugin_pin(&new_plugin) {
+        let _ = install_plugin_pin(&old_plugin);
+        return Err(error);
+    }
+
+    if let Err(error) = config::update_cli_release(&mut config.document, version.as_str())
+        .and_then(|_| config::update_plugin_pin(&mut config.document, &new_plugin))
+        .and_then(|_| config.save_if_changed(&before).map(|_| ()))
+    {
+        let _ = install_plugin_pin(&old_plugin);
+        return Err(format!(
+            "cannot commit self-update; old config retained: {error}"
+        ));
+    }
+    Ok((version, config.path))
+}
+
+fn load_compatibility_manifest() -> Result<CompatibilityManifest, String> {
+    let location = std::env::var("SKILLS_COMPATIBILITY_MANIFEST").unwrap_or_else(|_| {
+        "https://raw.githubusercontent.com/fullmeta-dev/skills/main/release-compatibility.json"
+            .into()
+    });
+    let contents = if location.contains("://") {
+        let output = ProcessCommand::new("curl")
+            .args([
+                "--fail",
+                "--location",
+                "--silent",
+                "--show-error",
+                &location,
+            ])
+            .output()
+            .map_err(|error| format!("cannot run curl for compatibility manifest: {error}"))?;
+        if !output.status.success() {
+            return Err(process_failure("compatibility manifest download", &output));
+        }
+        output.stdout
+    } else {
+        fs::read(&location)
+            .map_err(|error| format!("cannot read compatibility manifest {}: {error}", location))?
+    };
+    serde_json::from_slice(&contents)
+        .map_err(|error| format!("cannot parse compatibility manifest: {error}"))
+}
+
+fn compare_versions(left: &str, right: &str) -> std::cmp::Ordering {
+    let parse = |value: &str| {
+        value
+            .trim_start_matches('v')
+            .split('.')
+            .map(|part| part.parse::<u64>().unwrap_or(0))
+            .collect::<Vec<_>>()
+    };
+    parse(left).cmp(&parse(right))
+}
+
+fn require_mise_version(minimum: &str) -> Result<(), String> {
+    let output = ProcessCommand::new(std::env::var_os("MISE_BIN").unwrap_or_else(|| "mise".into()))
+        .arg("--version")
+        .output()
+        .map_err(|error| format!("cannot determine mise version: {error}"))?;
+    if !output.status.success() {
+        return Err("cannot determine mise version".into());
+    }
+    let version_output = String::from_utf8_lossy(&output.stdout);
+    let actual = version_output.split_whitespace().next().unwrap_or_default();
+    if compare_versions(actual, minimum) == std::cmp::Ordering::Less {
+        return Err(format!(
+            "skills release requires mise >= {minimum}; found {actual}"
+        ));
+    }
+    Ok(())
+}
+
+fn install_plugin_pin(pin: &str) -> Result<(), String> {
+    let (desired_url, desired_revision) = pin.rsplit_once('#').ok_or_else(|| {
+        "backend compatibility pin must contain an URL and immutable revision".to_string()
+    })?;
+    let plugin_dir = std::env::var_os("MISE_DATA_DIR")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME").map(|path| PathBuf::from(path).join(".local/share/mise"))
+        })
+        .ok_or_else(|| "cannot determine mise data directory for backend plugin".to_string())?
+        .join("plugins/skills");
+    let installed_url = if plugin_dir.join(".git").is_dir() {
+        ProcessCommand::new("git")
+            .args([
+                "-C",
+                plugin_dir.to_str().unwrap_or_default(),
+                "config",
+                "--get",
+                "remote.origin.url",
+            ])
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+    } else {
+        None
+    };
+    let installed_revision = if plugin_dir.join(".git").is_dir() {
+        ProcessCommand::new("git")
+            .args([
+                "-C",
+                plugin_dir.to_str().unwrap_or_default(),
+                "rev-parse",
+                "HEAD",
+            ])
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+    } else {
+        None
+    };
+    if installed_url.as_deref() == Some(desired_url)
+        && installed_revision.as_deref() == Some(desired_revision)
+    {
+        return Ok(());
+    }
+
+    let mise = std::env::var_os("MISE_BIN").unwrap_or_else(|| "mise".into());
+    if plugin_dir.is_dir() {
+        let remove = ProcessCommand::new(&mise)
+            .args(["plugins", "uninstall", "--yes", "skills"])
+            .output()
+            .map_err(|error| format!("cannot run mise plugin uninstall: {error}"))?;
+        if !remove.status.success() {
+            return Err(process_failure("mise plugin uninstall", &remove));
+        }
+    }
+    let output = ProcessCommand::new(mise)
+        .args(["plugins", "install", "skills", pin])
+        .output()
+        .map_err(|error| format!("cannot run mise plugin install: {error}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(process_failure("mise plugin install", &output))
+    }
+}
+
+fn run_normal_mise_install(config: &Config, locked: bool, dry_run: bool) -> Result<String, String> {
+    let output = run_normal_mise_install_at(config, &[], locked, dry_run)?;
+    if !output.status.success() {
+        return Err(process_failure("mise install", &output));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+fn run_normal_mise_install_at(
+    config: &Config,
+    tools: &[String],
+    locked: bool,
+    dry_run: bool,
+) -> Result<std::process::Output, String> {
+    let mise = std::env::var_os("MISE_BIN").unwrap_or_else(|| "mise".into());
+    let mut command = ProcessCommand::new(mise);
+    command
+        .current_dir(&config.root)
+        .env("MISE_CONFIG_FILE", &config.path)
+        .args(["install", "--yes", "--jobs", "1"]);
+    if let Ok(environment) = std::env::var("MISE_ENV") {
+        if !environment.is_empty() {
+            command.args(["--env", &environment]);
+        }
+    }
+    if locked {
+        command.arg("--locked");
+    }
+    if dry_run {
+        command.arg("--dry-run");
+    }
+    for tool in tools {
+        command.arg(tool);
+    }
+    command
+        .output()
+        .map_err(|error| format!("cannot run normal mise install: {error}"))
+}
+
+fn process_failure(action: &str, output: &std::process::Output) -> String {
+    let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if detail.is_empty() {
+        format!("{action} failed with status {}", output.status)
+    } else {
+        format!("{action} failed: {detail}")
+    }
+}
+
+fn collision_diagnostics(config: &Config) -> Vec<String> {
+    let mut diagnostics = Vec::new();
+    let current = std::env::current_exe()
+        .ok()
+        .and_then(|path| fs::canonicalize(path).ok());
+    if let Some(path) = skills_on_path() {
+        let canonical = fs::canonicalize(&path).ok();
+        if current.is_none() || canonical != current {
+            diagnostics.push(format!("PATH owner: {}", path.display()));
+        }
+    }
+    let mise = std::env::var_os("MISE_BIN").unwrap_or_else(|| "mise".into());
+    if let Ok(output) = ProcessCommand::new(mise)
+        .current_dir(&config.root)
+        .env("MISE_CONFIG_FILE", &config.path)
+        .args(["which", "skills"])
+        .output()
+    {
+        if output.status.success() {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !path.is_empty() {
+                let resolved = PathBuf::from(&path);
+                let canonical = fs::canonicalize(&resolved).ok();
+                if current.is_none() || canonical != current {
+                    diagnostics.push(format!("mise owner: {path}"));
+                }
+            }
+        }
+    }
+    diagnostics.sort();
+    diagnostics.dedup();
+    diagnostics
+}
+
+fn skills_on_path() -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    for directory in std::env::split_paths(&path) {
+        let candidate = directory.join("skills");
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
 fn run_sync(args: SyncArgs) -> ExitCode {
     match Config::load(&args.scope.scope()).and_then(|config| {
         let report = lifecycle::sync(&config, args.scope.is_global())?;
@@ -558,6 +1061,7 @@ fn run_status(args: StatusArgs) -> ExitCode {
         let lifecycle = lifecycle::status(&config, args.scope.is_global())?;
         let output = StatusOutput {
             config: config.path.display().to_string(),
+            environment: std::env::var("MISE_ENV").unwrap_or_else(|_| "default".into()),
             tools: config::skill_tools(&config.document)?,
             links: lifecycle.links,
             diagnostics: lifecycle.diagnostics,
@@ -568,6 +1072,8 @@ fn run_status(args: StatusArgs) -> ExitCode {
                 serde_json::to_string_pretty(&output).map_err(|error| error.to_string())?
             );
         } else {
+            println!("config\t{}", output.config);
+            println!("environment\t{}", output.environment);
             for tool in &output.tools {
                 println!("{}\t{}", tool.key, tool.version);
             }
@@ -626,7 +1132,7 @@ fn remove_command(args: RemoveArgs) -> Result<(bool, PathBuf), String> {
     // mise artifact whenever another declaration in this config identifies
     // the same source+version.
     if !tool_still_declared && !remaining_reference {
-        uninstall_artifact(&removed_tool)?;
+        uninstall_artifact(&config, &removed_tool)?;
     }
     Ok((before != config.document.to_string(), config.path))
 }
@@ -695,11 +1201,13 @@ fn same_config_path(left: &Path, right: &Path) -> bool {
     fs::canonicalize(left).ok() == fs::canonicalize(right).ok() || left == right
 }
 
-fn uninstall_artifact(tool: &config::ToolInfo) -> Result<(), String> {
+fn uninstall_artifact(config: &Config, tool: &config::ToolInfo) -> Result<(), String> {
     let mise = std::env::var_os("MISE_BIN").unwrap_or_else(|| "mise".into());
     let selector = format!("{}@{}", tool.key, tool.version);
     let output = ProcessCommand::new(&mise)
-        .args(["uninstall", "--yes", "--quiet", &selector])
+        .current_dir(&config.root)
+        .env("MISE_CONFIG_FILE", &config.path)
+        .args(["uninstall", "--yes", "--quiet", "--", &selector])
         .output()
         .map_err(|error| format!("cannot run normal mise artifact removal: {error}"))?;
     if !output.status.success() {

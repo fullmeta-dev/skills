@@ -4,7 +4,7 @@ use std::process::Command;
 use tempfile::TempDir;
 
 fn binary() -> &'static str {
-    env!("CARGO_BIN_EXE_mise-skills")
+    env!("CARGO_BIN_EXE_skills")
 }
 
 fn skill_source(root: &Path, name: &str) -> PathBuf {
@@ -23,7 +23,7 @@ fn run(cwd: &Path, args: &[&str]) -> std::process::Output {
         .current_dir(cwd)
         .args(args)
         .output()
-        .expect("run mise-skills")
+        .expect("run skills")
 }
 
 fn run_with_env(cwd: &Path, args: &[&str], key: &str, value: &Path) -> std::process::Output {
@@ -32,7 +32,7 @@ fn run_with_env(cwd: &Path, args: &[&str], key: &str, value: &Path) -> std::proc
         .args(args)
         .env(key, value)
         .output()
-        .expect("run mise-skills")
+        .expect("run skills")
 }
 
 #[test]
@@ -60,7 +60,7 @@ fn use_edits_project_and_explicit_paths_without_damaging_hooks() {
     let config = fs::read_to_string(project.join("mise.toml")).unwrap();
     assert!(config.contains("# retain"));
     assert!(config.contains("python = \"3\""));
-    assert!(config.contains("mise run skills -- sync --locked"));
+    assert!(config.contains("skills sync --locked"));
     assert!(config.contains("echo old"));
     assert!(config.contains("[tasks.bootstrap]"));
 
@@ -165,7 +165,7 @@ fn locked_use_preserves_a_pin_and_upgrade_changes_only_version() {
     assert!(upgraded.contains("source = "));
     assert!(upgraded.contains("include = [\"source\"]"));
     assert!(upgraded.contains("agents = [\"pi\"]"));
-    assert!(upgraded.contains("mise run skills -- sync --locked"));
+    assert!(upgraded.contains("skills sync --locked"));
 }
 
 #[test]

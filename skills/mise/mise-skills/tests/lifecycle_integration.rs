@@ -4,7 +4,7 @@ use std::process::{Command, Output};
 use tempfile::TempDir;
 
 fn binary() -> &'static str {
-    env!("CARGO_BIN_EXE_mise-skills")
+    env!("CARGO_BIN_EXE_skills")
 }
 
 fn run(cwd: &Path, args: &[&str], envs: &[(&str, &Path)]) -> Output {
@@ -13,7 +13,7 @@ fn run(cwd: &Path, args: &[&str], envs: &[(&str, &Path)]) -> Output {
     for (key, value) in envs {
         command.env(key, value);
     }
-    command.output().expect("run mise-skills")
+    command.output().expect("run skills")
 }
 
 fn skill(source: &Path, name: &str) {

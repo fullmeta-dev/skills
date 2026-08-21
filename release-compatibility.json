@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "repository": "fullmeta-dev/skills",
+  "latest": "0.1.0",
+  "releases": {
+    "0.1.0": {
+      "minimum_mise": "2026.6.14",
+      "plugin_url": "https://github.com/fullmeta-dev/skills.git",
+      "plugin_revision": "348a5b2021d1e8b6d398c1da068fee90bb1c3653",
+      "asset_pattern": "skills_*.tar.gz"
+    }
+  }
+}

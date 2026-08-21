@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use toml_edit::{value, Array, DocumentMut, Item, Table, Value};
 
-pub const POSTINSTALL_COMMAND: &str = "mise run skills -- sync --locked";
+pub const POSTINSTALL_COMMAND: &str = "skills sync --locked";
 
 #[derive(Debug, Clone)]
 pub enum Scope {
@@ -37,6 +37,25 @@ pub struct ToolInfo {
 
 impl Scope {
     pub fn config_path(&self) -> Result<PathBuf, String> {
+        let environment = std::env::var("MISE_ENV").unwrap_or_default();
+        validate_environment_name(&environment)?;
+        let with_environment = |path: PathBuf| {
+            if environment.is_empty() {
+                return path;
+            }
+            let Some(file_name) = path.file_name().and_then(|value| value.to_str()) else {
+                return path;
+            };
+            let suffix = format!(".{environment}");
+            let (stem, extension) = match file_name.rsplit_once('.') {
+                Some((stem, extension)) => (stem.to_string(), format!(".{extension}")),
+                None => (file_name.to_string(), String::new()),
+            };
+            if stem.ends_with(&suffix) {
+                return path;
+            }
+            path.with_file_name(format!("{stem}{suffix}{extension}"))
+        };
         match self {
             Self::Project => {
                 let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
@@ -44,7 +63,7 @@ impl Scope {
                 loop {
                     let config = candidate.join("mise.toml");
                     if config.is_file() {
-                        return Ok(config);
+                        return Ok(with_environment(config));
                     }
                     let Some(parent) = candidate.parent() else {
                         break;
@@ -54,12 +73,12 @@ impl Scope {
                     }
                     candidate = parent;
                 }
-                Ok(cwd.join("mise.toml"))
+                Ok(with_environment(cwd.join("mise.toml")))
             }
             Self::Global => {
                 if let Ok(path) = std::env::var("MISE_CONFIG_FILE") {
                     if !path.is_empty() {
-                        return Ok(PathBuf::from(path));
+                        return Ok(with_environment(PathBuf::from(path)));
                     }
                 }
                 let dir = std::env::var_os("MISE_CONFIG_DIR")
@@ -75,7 +94,7 @@ impl Scope {
                     .ok_or_else(|| {
                         "cannot determine the global mise config directory".to_string()
                     })?;
-                Ok(dir.join("config.toml"))
+                Ok(with_environment(dir.join("config.toml")))
             }
             Self::Path(path) => {
                 let path = if path.is_absolute() {
@@ -86,13 +105,27 @@ impl Scope {
                         .join(path)
                 };
                 if path.is_dir() {
-                    Ok(path.join("mise.toml"))
+                    Ok(with_environment(path.join("mise.toml")))
                 } else {
-                    Ok(path)
+                    Ok(with_environment(path))
                 }
             }
         }
     }
+}
+
+pub fn validate_environment_name(value: &str) -> Result<(), String> {
+    if value.is_empty() {
+        return Ok(());
+    }
+    if value.len() > 64
+        || !value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-'))
+    {
+        return Err("mise environment must contain only letters, numbers, '_' or '-'".into());
+    }
+    Ok(())
 }
 
 impl Config {
@@ -132,8 +165,13 @@ impl Config {
                 )
             })?;
         }
-        fs::write(&self.path, after)
-            .map_err(|error| format!("cannot write {}: {error}", self.path.display()))?;
+        let temporary = self.path.with_extension("toml.skills-tmp");
+        fs::write(&temporary, after)
+            .map_err(|error| format!("cannot write {}: {error}", temporary.display()))?;
+        if let Err(error) = fs::rename(&temporary, &self.path) {
+            let _ = fs::remove_file(&temporary);
+            return Err(format!("cannot replace {}: {error}", self.path.display()));
+        }
         Ok(true)
     }
 }
@@ -314,6 +352,34 @@ pub fn update_version(document: &mut DocumentMut, key: &str, version: &str) -> R
         return Err(format!("skill tool {key:?} has no version"));
     }
     replace_string(table, "version", version);
+    Ok(())
+}
+
+pub fn update_cli_release(document: &mut DocumentMut, version: &str) -> Result<(), String> {
+    let tools = document
+        .get_mut("tools")
+        .and_then(Item::as_table_mut)
+        .ok_or_else(|| "config has no [tools] table".to_string())?;
+    let table = tools
+        .get_mut("github:fullmeta-dev/skills")
+        .and_then(Item::as_table_mut)
+        .ok_or_else(|| "config has no github:fullmeta-dev/skills CLI table".to_string())?;
+    if table.get("bin").and_then(Item::as_str) != Some("skills") {
+        return Err("github:fullmeta-dev/skills must expose bin = \\\"skills\\\"".into());
+    }
+    if !table.contains_key("version") {
+        return Err("github:fullmeta-dev/skills has no version".into());
+    }
+    replace_string(table, "version", version);
+    Ok(())
+}
+
+pub fn update_plugin_pin(document: &mut DocumentMut, pin: &str) -> Result<(), String> {
+    let plugins = ensure_table(document, "plugins")?;
+    if !plugins.contains_key("vfox-backend:skills") {
+        return Err("config has no vfox-backend:skills plugin declaration".into());
+    }
+    replace_string(plugins, "vfox-backend:skills", pin);
     Ok(())
 }
 
@@ -547,14 +613,14 @@ mod tests {
             ensure_postinstall(&mut document).unwrap();
             let rendered = document.to_string();
             assert_eq!(once, rendered);
-            assert_eq!(rendered.matches(POSTINSTALL_COMMAND).count(), 2);
+            assert_eq!(rendered.matches(POSTINSTALL_COMMAND).count(), 1);
         }
 
         for input in [
-            "[hooks]\npostinstall = \"mise run skills -- sync --locked\"\n",
-            "[hooks]\npostinstall = [\"mise run skills -- sync --locked\"]\n",
-            "[hooks.postinstall]\nrun = \"mise run skills -- sync --locked\"\n",
-            "[hooks]\npostinstall = { run = \"mise run skills -- sync --locked\" }\n",
+            "[hooks]\npostinstall = \"skills sync --locked\"\n",
+            "[hooks]\npostinstall = [\"skills sync --locked\"]\n",
+            "[hooks.postinstall]\nrun = \"skills sync --locked\"\n",
+            "[hooks]\npostinstall = { run = \"skills sync --locked\" }\n",
         ] {
             let mut document = doc(input);
             ensure_postinstall(&mut document).unwrap();

@@ -1,4 +1,4 @@
-_mise__skills() {
+_skills() {
     local i cur prev opts cmd
     COMPREPLY=()
     if [[ "${BASH_VERSINFO[0]}" -ge 4 ]]; then
@@ -14,73 +14,91 @@ _mise__skills() {
     do
         case "${cmd},${i}" in
             ",$1")
-                cmd="mise__skills"
+                cmd="skills"
                 ;;
-            mise__skills,check)
-                cmd="mise__skills__subcmd__validate"
+            skills,check)
+                cmd="skills__subcmd__validate"
                 ;;
-            mise__skills,completion)
-                cmd="mise__skills__subcmd__completions"
+            skills,completion)
+                cmd="skills__subcmd__completions"
                 ;;
-            mise__skills,completions)
-                cmd="mise__skills__subcmd__completions"
+            skills,completions)
+                cmd="skills__subcmd__completions"
                 ;;
-            mise__skills,help)
-                cmd="mise__skills__subcmd__help"
+            skills,doctor)
+                cmd="skills__subcmd__doctor"
                 ;;
-            mise__skills,list)
-                cmd="mise__skills__subcmd__list"
+            skills,help)
+                cmd="skills__subcmd__help"
                 ;;
-            mise__skills,prune)
-                cmd="mise__skills__subcmd__prune"
+            skills,install)
+                cmd="skills__subcmd__install"
                 ;;
-            mise__skills,remove)
-                cmd="mise__skills__subcmd__remove"
+            skills,list)
+                cmd="skills__subcmd__list"
                 ;;
-            mise__skills,status)
-                cmd="mise__skills__subcmd__status"
+            skills,prune)
+                cmd="skills__subcmd__prune"
                 ;;
-            mise__skills,sync)
-                cmd="mise__skills__subcmd__sync"
+            skills,remove)
+                cmd="skills__subcmd__remove"
                 ;;
-            mise__skills,upgrade)
-                cmd="mise__skills__subcmd__upgrade"
+            skills,self-update)
+                cmd="skills__subcmd__self__subcmd__update"
                 ;;
-            mise__skills,use)
-                cmd="mise__skills__subcmd__use"
+            skills,status)
+                cmd="skills__subcmd__status"
                 ;;
-            mise__skills,validate)
-                cmd="mise__skills__subcmd__validate"
+            skills,sync)
+                cmd="skills__subcmd__sync"
                 ;;
-            mise__skills__subcmd__help,completions)
-                cmd="mise__skills__subcmd__help__subcmd__completions"
+            skills,upgrade)
+                cmd="skills__subcmd__upgrade"
                 ;;
-            mise__skills__subcmd__help,help)
-                cmd="mise__skills__subcmd__help__subcmd__help"
+            skills,use)
+                cmd="skills__subcmd__use"
                 ;;
-            mise__skills__subcmd__help,list)
-                cmd="mise__skills__subcmd__help__subcmd__list"
+            skills,validate)
+                cmd="skills__subcmd__validate"
                 ;;
-            mise__skills__subcmd__help,prune)
-                cmd="mise__skills__subcmd__help__subcmd__prune"
+            skills__subcmd__help,completions)
+                cmd="skills__subcmd__help__subcmd__completions"
                 ;;
-            mise__skills__subcmd__help,remove)
-                cmd="mise__skills__subcmd__help__subcmd__remove"
+            skills__subcmd__help,doctor)
+                cmd="skills__subcmd__help__subcmd__doctor"
                 ;;
-            mise__skills__subcmd__help,status)
-                cmd="mise__skills__subcmd__help__subcmd__status"
+            skills__subcmd__help,help)
+                cmd="skills__subcmd__help__subcmd__help"
                 ;;
-            mise__skills__subcmd__help,sync)
-                cmd="mise__skills__subcmd__help__subcmd__sync"
+            skills__subcmd__help,install)
+                cmd="skills__subcmd__help__subcmd__install"
                 ;;
-            mise__skills__subcmd__help,upgrade)
-                cmd="mise__skills__subcmd__help__subcmd__upgrade"
+            skills__subcmd__help,list)
+                cmd="skills__subcmd__help__subcmd__list"
                 ;;
-            mise__skills__subcmd__help,use)
-                cmd="mise__skills__subcmd__help__subcmd__use"
+            skills__subcmd__help,prune)
+                cmd="skills__subcmd__help__subcmd__prune"
                 ;;
-            mise__skills__subcmd__help,validate)
-                cmd="mise__skills__subcmd__help__subcmd__validate"
+            skills__subcmd__help,remove)
+                cmd="skills__subcmd__help__subcmd__remove"
+                ;;
+            skills__subcmd__help,self-update)
+                cmd="skills__subcmd__help__subcmd__self__subcmd__update"
+                ;;
+            skills__subcmd__help,status)
+                cmd="skills__subcmd__help__subcmd__status"
+                ;;
+            skills__subcmd__help,sync)
+                cmd="skills__subcmd__help__subcmd__sync"
+                ;;
+            skills__subcmd__help,upgrade)
+                cmd="skills__subcmd__help__subcmd__upgrade"
+                ;;
+            skills__subcmd__help,use)
+                cmd="skills__subcmd__help__subcmd__use"
+                ;;
+            skills__subcmd__help,validate)
+                cmd="skills__subcmd__help__subcmd__validate"
                 ;;
             *)
                 ;;
@@ -88,8 +106,8 @@ _mise__skills() {
     done
 
     case "${cmd}" in
-        mise__skills)
-            opts="-h -V --help --version list use upgrade sync status remove prune validate check completions completion help"
+        skills)
+            opts="-h -V --help --version list use upgrade install self-update doctor sync status remove prune validate check completions completion help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 1 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -102,7 +120,7 @@ _mise__skills() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mise__subcmd__skills__subcmd__completions)
+        skills__subcmd__completions)
             opts="-h --help bash zsh fish powershell"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -116,8 +134,30 @@ _mise__skills() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mise__subcmd__skills__subcmd__help)
-            opts="list use upgrade sync status remove prune validate completions help"
+        skills__subcmd__doctor)
+            opts="-h --env --global --path --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --env)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --path)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        skills__subcmd__help)
+            opts="list use upgrade install self-update doctor sync status remove prune validate completions help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -130,7 +170,7 @@ _mise__skills() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mise__subcmd__skills__subcmd__help__subcmd__completions)
+        skills__subcmd__help__subcmd__completions)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -144,7 +184,7 @@ _mise__skills() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mise__subcmd__skills__subcmd__help__subcmd__help)
+        skills__subcmd__help__subcmd__doctor)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -158,7 +198,7 @@ _mise__skills() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mise__subcmd__skills__subcmd__help__subcmd__list)
+        skills__subcmd__help__subcmd__help)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -172,7 +212,7 @@ _mise__skills() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mise__subcmd__skills__subcmd__help__subcmd__prune)
+        skills__subcmd__help__subcmd__install)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -186,7 +226,7 @@ _mise__skills() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mise__subcmd__skills__subcmd__help__subcmd__remove)
+        skills__subcmd__help__subcmd__list)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -200,7 +240,7 @@ _mise__skills() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mise__subcmd__skills__subcmd__help__subcmd__status)
+        skills__subcmd__help__subcmd__prune)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -214,7 +254,7 @@ _mise__skills() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mise__subcmd__skills__subcmd__help__subcmd__sync)
+        skills__subcmd__help__subcmd__remove)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -228,7 +268,7 @@ _mise__skills() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mise__subcmd__skills__subcmd__help__subcmd__upgrade)
+        skills__subcmd__help__subcmd__self__subcmd__update)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -242,7 +282,7 @@ _mise__skills() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mise__subcmd__skills__subcmd__help__subcmd__use)
+        skills__subcmd__help__subcmd__status)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -256,7 +296,7 @@ _mise__skills() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mise__subcmd__skills__subcmd__help__subcmd__validate)
+        skills__subcmd__help__subcmd__sync)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -270,7 +310,71 @@ _mise__skills() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mise__subcmd__skills__subcmd__list)
+        skills__subcmd__help__subcmd__upgrade)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        skills__subcmd__help__subcmd__use)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        skills__subcmd__help__subcmd__validate)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        skills__subcmd__install)
+            opts="-h --env --global --path --locked --dry-run --accept-collision --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --env)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --path)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        skills__subcmd__list)
             opts="-i -e -h --subpath --include --exclude --tree --json --explain --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -304,13 +408,17 @@ _mise__skills() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mise__subcmd__skills__subcmd__prune)
-            opts="-h --global --path --help"
+        skills__subcmd__prune)
+            opts="-h --env --global --path --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --env)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 --path)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
@@ -322,13 +430,17 @@ _mise__skills() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mise__subcmd__skills__subcmd__remove)
-            opts="-h --global --path --help"
+        skills__subcmd__remove)
+            opts="-h --env --global --path --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --env)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 --path)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
@@ -340,13 +452,43 @@ _mise__skills() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mise__subcmd__skills__subcmd__status)
-            opts="-h --global --path --json --help"
+        skills__subcmd__self__subcmd__update)
+            opts="-h --global --path --env --version --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --path)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --env)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --version)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        skills__subcmd__status)
+            opts="-h --env --global --path --json --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --env)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 --path)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
@@ -358,13 +500,17 @@ _mise__skills() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mise__subcmd__skills__subcmd__sync)
-            opts="-h --global --path --locked --help"
+        skills__subcmd__sync)
+            opts="-h --env --global --path --locked --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --env)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 --path)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
@@ -376,13 +522,17 @@ _mise__skills() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mise__subcmd__skills__subcmd__upgrade)
-            opts="-h --global --path --locked --help"
+        skills__subcmd__upgrade)
+            opts="-h --env --global --path --locked --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --env)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 --path)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
@@ -394,13 +544,17 @@ _mise__skills() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mise__subcmd__skills__subcmd__use)
-            opts="-h --global --path --agent --subpath --track --reference --locked --help"
+        skills__subcmd__use)
+            opts="-h --env --global --path --agent --subpath --track --reference --locked --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --env)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 --path)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
@@ -428,7 +582,7 @@ _mise__skills() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        mise__subcmd__skills__subcmd__validate)
+        skills__subcmd__validate)
             opts="-h --subpath --json --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -450,7 +604,7 @@ _mise__skills() {
 }
 
 if [[ "${BASH_VERSINFO[0]}" -eq 4 && "${BASH_VERSINFO[1]}" -ge 4 || "${BASH_VERSINFO[0]}" -gt 4 ]]; then
-    complete -F _mise__skills -o nosort -o bashdefault -o default mise-skills
+    complete -F _skills -o nosort -o bashdefault -o default skills
 else
-    complete -F _mise__skills -o bashdefault -o default mise-skills
+    complete -F _skills -o bashdefault -o default skills
 fi

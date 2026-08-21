@@ -1,4 +1,4 @@
-use mise_skills::{discover, DiagnosticLevel};
+use skills::{discover, DiagnosticLevel};
 use std::fs;
 use std::path::PathBuf;
 use tempfile::TempDir;

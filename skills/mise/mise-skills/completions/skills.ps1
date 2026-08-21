@@ -2,12 +2,12 @@
 using namespace System.Management.Automation
 using namespace System.Management.Automation.Language
 
-Register-ArgumentCompleter -Native -CommandName 'mise-skills' -ScriptBlock {
+Register-ArgumentCompleter -Native -CommandName 'skills' -ScriptBlock {
     param($wordToComplete, $commandAst, $cursorPosition)
 
     $commandElements = $commandAst.CommandElements
     $command = @(
-        'mise-skills'
+        'skills'
         for ($i = 1; $i -lt $commandElements.Count; $i++) {
             $element = $commandElements[$i]
             if ($element -isnot [StringConstantExpressionAst] -or
@@ -20,7 +20,7 @@ Register-ArgumentCompleter -Native -CommandName 'mise-skills' -ScriptBlock {
     }) -join ';'
 
     $completions = @(switch ($command) {
-        'mise-skills' {
+        'skills' {
             [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help (see more with ''--help'')')
             [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help (see more with ''--help'')')
             [CompletionResult]::new('-V', '-V ', [CompletionResultType]::ParameterName, 'Print version')
@@ -28,6 +28,9 @@ Register-ArgumentCompleter -Native -CommandName 'mise-skills' -ScriptBlock {
             [CompletionResult]::new('list', 'list', [CompletionResultType]::ParameterValue, 'List discovered skills, optionally applying selectors')
             [CompletionResult]::new('use', 'use', [CompletionResultType]::ParameterValue, 'Declare a source and selected skills, resolving its immutable pin')
             [CompletionResult]::new('upgrade', 'upgrade', [CompletionResultType]::ParameterValue, 'Refresh immutable pins for declared sources. This never installs or syncs')
+            [CompletionResult]::new('install', 'install', [CompletionResultType]::ParameterValue, 'Install selected configuration tools through normal mise, then sync links')
+            [CompletionResult]::new('self-update', 'self-update', [CompletionResultType]::ParameterValue, 'Update the CLI and its compatible backend as one safe pair')
+            [CompletionResult]::new('doctor', 'doctor', [CompletionResultType]::ParameterValue, 'Diagnose executable collisions and selected mise ownership')
             [CompletionResult]::new('sync', 'sync', [CompletionResultType]::ParameterValue, 'Converge the selected configuration without following update tracks')
             [CompletionResult]::new('status', 'status', [CompletionResultType]::ParameterValue, 'Show declared skill sources and their link state')
             [CompletionResult]::new('remove', 'remove', [CompletionResultType]::ParameterValue, 'Remove a declaration or selected entries from its include policy')
@@ -39,7 +42,7 @@ Register-ArgumentCompleter -Native -CommandName 'mise-skills' -ScriptBlock {
             [CompletionResult]::new('help', 'help', [CompletionResultType]::ParameterValue, 'Print this message or the help of the given subcommand(s)')
             break
         }
-        'mise-skills;list' {
+        'skills;list' {
             [CompletionResult]::new('--subpath', '--subpath', [CompletionResultType]::ParameterName, 'Select a source subpath before applying catalog discovery')
             [CompletionResult]::new('-i', '-i', [CompletionResultType]::ParameterName, 'Include a selector. Repeated values are ORed')
             [CompletionResult]::new('--include', '--include', [CompletionResultType]::ParameterName, 'Include a selector. Repeated values are ORed')
@@ -52,7 +55,8 @@ Register-ArgumentCompleter -Native -CommandName 'mise-skills' -ScriptBlock {
             [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help')
             break
         }
-        'mise-skills;use' {
+        'skills;use' {
+            [CompletionResult]::new('--env', '--env', [CompletionResultType]::ParameterName, 'Select mise''s environment-specific config (`mise.<env>.toml`)')
             [CompletionResult]::new('--path', '--path', [CompletionResultType]::ParameterName, 'Edit this mise config file (or mise.toml inside a directory)')
             [CompletionResult]::new('--agent', '--agent', [CompletionResultType]::ParameterName, 'Agent adapters to record in the declaration')
             [CompletionResult]::new('--subpath', '--subpath', [CompletionResultType]::ParameterName, 'Source-relative skill directory, validated against traversal')
@@ -64,7 +68,8 @@ Register-ArgumentCompleter -Native -CommandName 'mise-skills' -ScriptBlock {
             [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help')
             break
         }
-        'mise-skills;upgrade' {
+        'skills;upgrade' {
+            [CompletionResult]::new('--env', '--env', [CompletionResultType]::ParameterName, 'Select mise''s environment-specific config (`mise.<env>.toml`)')
             [CompletionResult]::new('--path', '--path', [CompletionResultType]::ParameterName, 'Edit this mise config file (or mise.toml inside a directory)')
             [CompletionResult]::new('--global', '--global', [CompletionResultType]::ParameterName, 'Edit the user-owned global mise config')
             [CompletionResult]::new('--locked', '--locked', [CompletionResultType]::ParameterName, 'Do not resolve or rewrite any declared version')
@@ -72,7 +77,36 @@ Register-ArgumentCompleter -Native -CommandName 'mise-skills' -ScriptBlock {
             [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help')
             break
         }
-        'mise-skills;sync' {
+        'skills;install' {
+            [CompletionResult]::new('--env', '--env', [CompletionResultType]::ParameterName, 'Select mise''s environment-specific config (`mise.<env>.toml`)')
+            [CompletionResult]::new('--path', '--path', [CompletionResultType]::ParameterName, 'Edit this mise config file (or mise.toml inside a directory)')
+            [CompletionResult]::new('--global', '--global', [CompletionResultType]::ParameterName, 'Edit the user-owned global mise config')
+            [CompletionResult]::new('--locked', '--locked', [CompletionResultType]::ParameterName, 'Require mise''s existing lockfile data without resolving tool URLs')
+            [CompletionResult]::new('--dry-run', '--dry-run', [CompletionResultType]::ParameterName, 'Show normal mise installation work without changing files')
+            [CompletionResult]::new('--accept-collision', '--accept-collision', [CompletionResultType]::ParameterName, 'Explicitly accept an unrelated existing `skills` executable')
+            [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help')
+            [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help')
+            break
+        }
+        'skills;self-update' {
+            [CompletionResult]::new('--path', '--path', [CompletionResultType]::ParameterName, 'Update this mise config file')
+            [CompletionResult]::new('--env', '--env', [CompletionResultType]::ParameterName, 'Select an environment-specific config')
+            [CompletionResult]::new('--version', '--version', [CompletionResultType]::ParameterName, 'Install a specific release from the compatibility manifest')
+            [CompletionResult]::new('--global', '--global', [CompletionResultType]::ParameterName, 'Update the user-owned global mise config (the default)')
+            [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help')
+            [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help')
+            break
+        }
+        'skills;doctor' {
+            [CompletionResult]::new('--env', '--env', [CompletionResultType]::ParameterName, 'Select mise''s environment-specific config (`mise.<env>.toml`)')
+            [CompletionResult]::new('--path', '--path', [CompletionResultType]::ParameterName, 'Edit this mise config file (or mise.toml inside a directory)')
+            [CompletionResult]::new('--global', '--global', [CompletionResultType]::ParameterName, 'Edit the user-owned global mise config')
+            [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help')
+            [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help')
+            break
+        }
+        'skills;sync' {
+            [CompletionResult]::new('--env', '--env', [CompletionResultType]::ParameterName, 'Select mise''s environment-specific config (`mise.<env>.toml`)')
             [CompletionResult]::new('--path', '--path', [CompletionResultType]::ParameterName, 'Edit this mise config file (or mise.toml inside a directory)')
             [CompletionResult]::new('--global', '--global', [CompletionResultType]::ParameterName, 'Edit the user-owned global mise config')
             [CompletionResult]::new('--locked', '--locked', [CompletionResultType]::ParameterName, 'Validate and converge using only already-declared immutable versions')
@@ -80,7 +114,8 @@ Register-ArgumentCompleter -Native -CommandName 'mise-skills' -ScriptBlock {
             [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help')
             break
         }
-        'mise-skills;status' {
+        'skills;status' {
+            [CompletionResult]::new('--env', '--env', [CompletionResultType]::ParameterName, 'Select mise''s environment-specific config (`mise.<env>.toml`)')
             [CompletionResult]::new('--path', '--path', [CompletionResultType]::ParameterName, 'Edit this mise config file (or mise.toml inside a directory)')
             [CompletionResult]::new('--global', '--global', [CompletionResultType]::ParameterName, 'Edit the user-owned global mise config')
             [CompletionResult]::new('--json', '--json', [CompletionResultType]::ParameterName, 'Emit machine-readable status')
@@ -88,48 +123,53 @@ Register-ArgumentCompleter -Native -CommandName 'mise-skills' -ScriptBlock {
             [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help')
             break
         }
-        'mise-skills;remove' {
+        'skills;remove' {
+            [CompletionResult]::new('--env', '--env', [CompletionResultType]::ParameterName, 'Select mise''s environment-specific config (`mise.<env>.toml`)')
             [CompletionResult]::new('--path', '--path', [CompletionResultType]::ParameterName, 'Edit this mise config file (or mise.toml inside a directory)')
             [CompletionResult]::new('--global', '--global', [CompletionResultType]::ParameterName, 'Edit the user-owned global mise config')
             [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help')
             [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help')
             break
         }
-        'mise-skills;prune' {
+        'skills;prune' {
+            [CompletionResult]::new('--env', '--env', [CompletionResultType]::ParameterName, 'Select mise''s environment-specific config (`mise.<env>.toml`)')
             [CompletionResult]::new('--path', '--path', [CompletionResultType]::ParameterName, 'Edit this mise config file (or mise.toml inside a directory)')
             [CompletionResult]::new('--global', '--global', [CompletionResultType]::ParameterName, 'Edit the user-owned global mise config')
             [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help')
             [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help')
             break
         }
-        'mise-skills;validate' {
+        'skills;validate' {
             [CompletionResult]::new('--subpath', '--subpath', [CompletionResultType]::ParameterName, 'Select a source subpath before validation')
             [CompletionResult]::new('--json', '--json', [CompletionResultType]::ParameterName, 'Emit stable machine-readable diagnostics')
             [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help')
             [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help')
             break
         }
-        'mise-skills;check' {
+        'skills;check' {
             [CompletionResult]::new('--subpath', '--subpath', [CompletionResultType]::ParameterName, 'Select a source subpath before validation')
             [CompletionResult]::new('--json', '--json', [CompletionResultType]::ParameterName, 'Emit stable machine-readable diagnostics')
             [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help')
             [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help')
             break
         }
-        'mise-skills;completions' {
+        'skills;completions' {
             [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help')
             [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help')
             break
         }
-        'mise-skills;completion' {
+        'skills;completion' {
             [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help')
             [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help')
             break
         }
-        'mise-skills;help' {
+        'skills;help' {
             [CompletionResult]::new('list', 'list', [CompletionResultType]::ParameterValue, 'List discovered skills, optionally applying selectors')
             [CompletionResult]::new('use', 'use', [CompletionResultType]::ParameterValue, 'Declare a source and selected skills, resolving its immutable pin')
             [CompletionResult]::new('upgrade', 'upgrade', [CompletionResultType]::ParameterValue, 'Refresh immutable pins for declared sources. This never installs or syncs')
+            [CompletionResult]::new('install', 'install', [CompletionResultType]::ParameterValue, 'Install selected configuration tools through normal mise, then sync links')
+            [CompletionResult]::new('self-update', 'self-update', [CompletionResultType]::ParameterValue, 'Update the CLI and its compatible backend as one safe pair')
+            [CompletionResult]::new('doctor', 'doctor', [CompletionResultType]::ParameterValue, 'Diagnose executable collisions and selected mise ownership')
             [CompletionResult]::new('sync', 'sync', [CompletionResultType]::ParameterValue, 'Converge the selected configuration without following update tracks')
             [CompletionResult]::new('status', 'status', [CompletionResultType]::ParameterValue, 'Show declared skill sources and their link state')
             [CompletionResult]::new('remove', 'remove', [CompletionResultType]::ParameterValue, 'Remove a declaration or selected entries from its include policy')
@@ -139,34 +179,43 @@ Register-ArgumentCompleter -Native -CommandName 'mise-skills' -ScriptBlock {
             [CompletionResult]::new('help', 'help', [CompletionResultType]::ParameterValue, 'Print this message or the help of the given subcommand(s)')
             break
         }
-        'mise-skills;help;list' {
+        'skills;help;list' {
             break
         }
-        'mise-skills;help;use' {
+        'skills;help;use' {
             break
         }
-        'mise-skills;help;upgrade' {
+        'skills;help;upgrade' {
             break
         }
-        'mise-skills;help;sync' {
+        'skills;help;install' {
             break
         }
-        'mise-skills;help;status' {
+        'skills;help;self-update' {
             break
         }
-        'mise-skills;help;remove' {
+        'skills;help;doctor' {
             break
         }
-        'mise-skills;help;prune' {
+        'skills;help;sync' {
             break
         }
-        'mise-skills;help;validate' {
+        'skills;help;status' {
             break
         }
-        'mise-skills;help;completions' {
+        'skills;help;remove' {
             break
         }
-        'mise-skills;help;help' {
+        'skills;help;prune' {
+            break
+        }
+        'skills;help;validate' {
+            break
+        }
+        'skills;help;completions' {
+            break
+        }
+        'skills;help;help' {
             break
         }
     })

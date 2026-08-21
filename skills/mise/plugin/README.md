@@ -2,7 +2,7 @@
 
 This Lua vfox backend installs one complete immutable source snapshot for a
 `skills:<source-id>` tool. Selection and agent activation belong to the
-`mise-skills` CLI, not this plugin.
+`skills` CLI, not this plugin.
 
 ## Tool options
 
@@ -20,7 +20,7 @@ Local `path:` sources are resolved against `config_root` when it is supplied
 by the caller (the backend also accepts the mise project/config root
 environment values). Their immutable version is
 `tree-<64-character-sha256>`. This is an internal mise-compatible encoding:
-the planned `mise-skills` lifecycle commands resolve and write it; users must
+the `skills` lifecycle commands resolve and write it; users must
 not calculate or hand-write a local digest. There is no supported manual
 local-digest workflow in this backend milestone.
 GitHub shorthand is converted to a Git URL; `git:` accepts HTTPS, SSH, and

@@ -1,128 +1,105 @@
 # Agent skills
 
-This repository is both an Agent Skills source repository and a mise-managed
-skills backend/CLI. The mise workflow installs complete immutable source
-snapshots and exposes the selected skills through Pi, Claude, or the shared
-Codex/Cursor target.
+This repository is an Agent Skills source tree and a mise backend/CLI. The
+public executable is `skills`; it installs immutable source snapshots through
+mise and materializes selected skills for supported agents.
 
-## mise-skills quick start
+## Quick start
 
-Prerequisites: [mise](https://mise.jdx.dev/) **2026.6.14 or newer**, Git, and
-one supported agent. The bootstrap hook needs the minimum release's
-`bootstrap.hooks.pre-tools` phase.
-
-Install the pinned global config, backend plugin, and released CLI in one
-copy-pasteable bootstrap. The script writes the checked-in config artifact
-(`docs/mise-skills-bootstrap.toml`), installs its idempotent pre-tools helper,
-and runs real `mise bootstrap`:
+Prerequisites: [mise](https://mise.jdx.dev/) 2026.6.14 or newer, Git, and a
+supported agent. Install the backend plugin and the released CLI as ordinary
+mise tools (no wrapper task is required):
 
 ```sh
-curl --fail --location https://raw.githubusercontent.com/fullmeta-dev/skills/d51ed766abacb614999316b13577c29928d80f0e/skills/mise/bootstrap.sh | bash -s -- d51ed766abacb614999316b13577c29928d80f0e
+mise plugins install skills https://github.com/fullmeta-dev/skills.git#348a5b2021d1e8b6d398c1da068fee90bb1c3653
+mise use -g github:fullmeta-dev/skills@0.1.0
 ```
 
-For an offline or reviewed setup, copy [`docs/mise-skills-bootstrap.toml`](docs/mise-skills-bootstrap.toml)
-to `$MISE_CONFIG_DIR/config.toml` and
-[`skills/mise/bootstrap-plugin.sh`](skills/mise/bootstrap-plugin.sh) to
-`$MISE_CONFIG_DIR/mise-skills-bootstrap-plugin.sh`, then run `mise bootstrap`.
-The config pins both the plugin declaration and CLI release; rerunning the
-helper is a no-op when that exact plugin URL and revision are installed.
+Set the CLI tool options in the global mise config:
 
-For a project, choose a source, selectors, and adapters. The CLI resolves the
-latest branch or tag to a full immutable pin; do not calculate a `tree-` or
-`rev:` value yourself:
+```toml
+[tools."github:fullmeta-dev/skills"]
+version = "0.1.0"
+bin = "skills"
+```
+
+Then install it through normal mise and select skills in a project:
 
 ```sh
-mise run skills -- use fullmeta-dev/skills code-review --agent pi --agent agents
 mise install
-mise run skills -- sync --locked
-mise run skills -- status
+skills use fullmeta-dev/skills code-review --agent pi
+skills install
+skills status
 ```
 
-`use` writes the project `mise.toml`, preserves existing TOML, and adds a
-postinstall hook. `--global` writes the user configuration; `--path FILE`
-selects another config root. `agents` is the shared target used by Codex and
-Cursor. Use `--agent claude` or `--agent pi` for their native targets.
+`skills use` resolves a full Git commit or local tree digest and writes the
+selected config. `skills install` coordinates normal `mise install` for that
+config, then runs a locked link sync. The generated postinstall hook is the
+direct command `skills sync --locked`.
 
-A source is pinned when it is declared. `track` is only update intent and is
-never followed by install or sync. Refresh explicitly, inspect the diff, and
-then install/sync:
+Use `--global`, `--path PATH`, and `--env ENV` to select the intended mise
+configuration. The effective config is never inferred from an arbitrary tool
+argument. `agents` is the shared Codex/Cursor target; `pi` and `claude` use
+their native locations.
+
+## Updates and removal
+
+Source pins never move during install or sync. Refresh them explicitly, then
+install the new immutable artifact:
 
 ```sh
-mise run skills -- upgrade
-mise install
-mise run skills -- sync --locked
+skills upgrade
+skills install
+skills sync --locked
 ```
 
-Remove selected skills or the complete declaration. Owned links are removed;
-unmanaged conflicts are reported and left untouched:
+Update the CLI and its pinned backend as a compatible pair:
 
 ```sh
-mise run skills -- remove skills:fullmeta-dev/skills code-review
-mise run skills -- remove skills:fullmeta-dev/skills
-mise run skills -- prune
+skills self-update
 ```
 
-Help and shell completion are side-effect free:
+`self-update` reads [`release-compatibility.json`](release-compatibility.json),
+installs the release before changing the selected config, and retains the old
+config when any step fails. Inspect collisions before accepting a replacement:
 
 ```sh
-mise run skills -- --help
-mise run skills -- completions bash > ~/.local/share/bash-completion/completions/mise-skills
-mise run skills -- completions zsh > ~/.zfunc/_mise-skills
-mise run skills -- completions fish > ~/.config/fish/completions/mise-skills.fish
-mise run skills -- completions powershell > "$HOME/.config/powershell/mise-skills.ps1"
+skills doctor --global
+skills install --accept-collision
 ```
 
-Use `mise tasks info skills` to inspect the task description and usage. The
-canonical automation form is `mise run skills -- <command> [arguments]`; the
-short `mise skills ...` form is convenient but may eventually be shadowed by a
-mise built-in.
-
-## Source syntax and references
-
-Friendly source forms are `owner/repository`, `github:owner/repository`,
-`git:https://host/repository.git`, and `path:relative-or-absolute-directory`.
-Selectors are bare skill names, repository-relative globs, or tag expressions
-such as `tag:web+frontend`; repeated includes are ORed and exclusions win.
-Optional `.mise/skills.toml` files provide discovery roots, exclusions, tags,
-and aliases.
-
-The complete reference, including immutable versions, scope-local ownership,
-adapter paths, conflicts, and troubleshooting, is in
-[`docs/mise-skills.md`](docs/mise-skills.md).
-
-## This repository as a source
-
-The original Vercel `skills` CLI workflow remains supported:
+Remove policy and owned links without touching unrelated targets:
 
 ```sh
-skills add fullmeta-dev/skills --all
-skills add . --all
-skills list
-skills update
-skills remove
+skills remove skills:fullmeta-dev/skills code-review
+skills remove skills:fullmeta-dev/skills
+skills prune
 ```
 
-The mise workflow is complementary: it owns immutable source installation and
-selection policy, while the backend materializes complete snapshots and the
-CLI owns agent links.
-
-## Development and compatibility checks
-
-The shipped backend is under `skills/mise/plugin`; the Rust CLI is under
-`skills/mise/mise-skills`. Run the isolated backend and compatibility checks
-from the repository root:
+## Help and completions
 
 ```sh
-skills/mise/mise-skills-tests/backend_test.sh
-skills/mise/mise-skills-tests/e2e.sh
-skills/mise/mise-skills-tests/run.sh
+skills --help
+skills completions bash > ~/.local/share/bash-completion/completions/skills
+skills completions zsh > ~/.zfunc/_skills
+skills completions fish > ~/.config/fish/completions/skills.fish
+skills completions powershell > "$HOME/.config/powershell/skills.ps1"
 ```
 
-The harnesses use disposable `HOME`, config, data, state, and cache
-directories. Set `MISE_SKILLS_KEEP_TEMP=1` to preserve failed fixtures. The
-CLI unit, fixture, lifecycle, help, and snapshot-style integration tests run
-with:
+The concise reference is [`docs/mise-skills.md`](docs/mise-skills.md).
+
+## Development
+
+The backend is under `skills/mise/plugin`; the Rust CLI is under
+`skills/mise/mise-skills`:
 
 ```sh
 cargo test --manifest-path skills/mise/mise-skills/Cargo.toml
+skills/mise/mise-skills-tests/backend_test.sh
+skills/mise/mise-skills-tests/e2e.sh
 ```
+
+Release assets are built by [`scripts/package-release.sh`](scripts/package-release.sh)
+and `.github/workflows/release.yml`. The first public release and its GitHub
+release publication remain an explicit deployment step after review; this
+checkout intentionally does not publish releases or tags.

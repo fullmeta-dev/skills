@@ -1,197 +1,119 @@
-# mise-skills reference
+# `skills` reference
 
-`mise-skills` manages Agent Skills as immutable mise tool snapshots. The
-normal workflow is:
+`skills` manages Agent Skills as immutable mise tool snapshots. It is a
+normal mise-managed executable, not a task wrapper.
 
-```sh
-mise run skills -- use SOURCE SELECTOR... --agent AGENT...
-mise install
-mise run skills -- sync --locked
-```
+## Configuration and install
 
-The CLI chooses and resolves the source pin. Users choose the source,
-selectors, and adapters; users do not calculate pins.
-
-## Installation and scope
-
-Use mise 2026.6.14 or newer. The global `skills` task is intentionally a
-normal mise task:
+Install the pinned backend plugin and CLI with ordinary mise configuration:
 
 ```toml
-[tasks.skills]
-description = "Manage Agent Skills"
-usage = '''
-arg "[arguments]" var=#true help="mise-skills command and arguments"
-'''
-dir = "{{cwd}}"
-run = "mise-skills ${usage_arguments-}"
-raw = true
+[plugins]
+"vfox-backend:skills" = "https://github.com/fullmeta-dev/skills.git#<plugin-commit>"
+
+[tools."github:fullmeta-dev/skills"]
+version = "0.1.0"
+bin = "skills"
 ```
 
-Use `mise run skills -- ...` in scripts and hooks. `mise skills ...` is an
-interactive shorthand only. Bare invocation delegates to the CLI without
-editing config, resolving sources, installing tools, or creating links. With
-task `usage` metadata, mise reserves `mise run skills --help` for its own
-side-effect-free task help; use `mise run skills -- --help` for CLI help.
+Then run:
 
-Commands default to the nearest project `mise.toml`:
+```sh
+mise install
+skills use SOURCE SELECTOR... --agent AGENT...
+skills install
+```
 
-- `--global` uses the user config (`MISE_CONFIG_FILE` or
-  `$MISE_CONFIG_DIR/config.toml`). Links go below `$HOME`.
-- `--path PATH` uses exactly that file, or `mise.toml` inside a directory.
-  Links are project-relative to the file's directory.
+`skills install` invokes normal `mise install` with an explicit effective
+config path, then directly runs locked sync. It never passes a user-supplied
+tool selector to mise. The selected environment is passed as mise's `-E`/
+`MISE_ENV` context. Use `--global`, `--path PATH`, or `--env ENV`; global is
+not merged into project ownership manifests.
 
-A config root owns only links recorded in its state manifest. Project and global
-configurations are not merged by this CLI.
+Commands default to the nearest project `mise.toml`. `--env development`
+writes/reads `mise.development.toml`, matching mise's environment-specific
+configuration. A global environment uses `config.<env>.toml` below the mise
+config directory. Diagnostics print the effective config path and environment.
 
-## Sources and immutable versions
-
-Accepted source syntax:
+## Commands
 
 ```text
-owner/repository
-github:owner/repository
-git:https://host.example/org/repository.git
-git:ssh://host.example/org/repository.git
-path:relative/or/absolute/directory
+skills list SOURCE [SELECTORS...]
+skills use [--global|--path PATH|--env ENV] SOURCE [SELECTORS...] --agent AGENT...
+skills install [--global|--path PATH|--env ENV] [--locked] [--dry-run]
+skills sync [--global|--path PATH|--env ENV] [--locked]
+skills status [--global|--path PATH|--env ENV] [--json]
+skills upgrade [TOOL...]
+skills self-update [--version VERSION]
+skills remove [--global|--path PATH|--env ENV] TOOL [SELECTORS...]
+skills prune [--global|--path PATH|--env ENV]
+skills doctor [--global|--path PATH|--env ENV]
 ```
 
-GitHub shorthand is written canonically as `github:owner/repository`; Git URLs
-are written as `git:URL`. Local paths are resolved relative to the declaring
-config file. `--subpath SUBPATH` is a safe source-relative directory used only
-for discovery and selection. Absolute paths, `..`, backslashes, and escaping
-links are rejected.
+`use` edits only the selected config and resolves an immutable `rev:<commit>`
+for Git sources or `tree-<sha256>` for local sources. `track` records update
+intent only. `upgrade` is the explicit source-pin refresh; install, postinstall,
+and sync never follow tracks. `self-update` reads the release compatibility
+manifest and updates the CLI/backend pair only after the new CLI is installed.
+A failed self-update leaves the old declaration usable.
 
-GitHub and Git sources resolve a branch, tag, or `--reference REF` to
-`version = "rev:<full-40-character-commit>"`. Local sources resolve to
-`version = "tree-<64-hexadecimal-digest>"`. These are implementation details:
-`use` and `upgrade` write them automatically.
+## Sources and selectors
 
-A declaration's `track` records update intent. Install, sync, and postinstall
-never follow it. Only an explicit `upgrade` resolves the track again. `--locked`
-prevents resolution and rewriting; it still permits mise to fetch an already
-pinned Git commit. A changed local tree makes `sync --locked` fail until
-`use` or `upgrade` refreshes the declaration.
+Accepted sources are `owner/repository`, `github:owner/repository`,
+`git:https://host/org/repository.git`, and
+`path:relative/or/absolute/directory`. Local paths are relative to the config
+that declares them. `--subpath` must be relative and cannot contain `..`,
+backslashes, or an absolute prefix.
 
-## Discovery, catalog, and selectors
-
-Every directory containing an exact `SKILL.md` is discovered recursively below
-the source/subpath. `.git`, `node_modules`, `dist`, `build`, and `__pycache__`
-are skipped. A complete skill directory includes scripts, references, assets,
-and symlinks within its root. Duplicate frontmatter names use the lexical path
-winner; `list --explain` reports shadowing.
-
-`SKILL.md` requires YAML frontmatter with string `name` and `description`.
-Top-level `tags` is an intentional extension accepted during normal install.
-Run the non-blocking strict diagnostic separately:
-
-```sh
-mise run skills -- validate path:../skills-source --json
-```
-
-An optional `.mise/skills.toml` contains only discovery overlays:
-
-```toml
-version = 1
-
-[discovery]
-roots = ["skills", "packages/*/agent-skills"]
-exclude = ["**/fixtures/**", "**/examples/**"]
-
-[tags]
-"skills/engineering/**" = ["engineering"]
-"skills/engineering/web/**" = ["web"]
-
-[aliases]
-review = "skills/engineering/review/code-review"
-```
-
-Tags match `[a-z0-9][a-z0-9./-]*`. Selectors are:
+Selectors are bare names, repository-relative globs, or tags:
 
 - `tag:web` selects one tag;
 - `tag:web+frontend` requires both tags;
 - separate includes are ORed;
-- a bare literal matches basename, frontmatter name, or alias;
-- a selector containing `/`, `*`, `?`, or `**` is a repository-relative glob;
-- excludes apply last and win; and
-- missing selectors are stable warnings, not v1 failures.
+- a bare selector matches basename, frontmatter name, or alias;
+- `/`, `*`, `?`, and `**` select repository-relative paths; and
+- excludes always win. Missing selectors are stable warnings.
 
-Examples:
+Discovery recursively finds exact `SKILL.md` files while skipping `.git`,
+`node_modules`, `dist`, `build`, and `__pycache__`. Duplicate names use the
+lexical path winner and are explained by `list --explain`. Complete skill
+directories (scripts, references, assets, and safe in-root links) are exposed.
+An optional `.mise/skills.toml` supplies discovery roots, exclusions, tags, and
+aliases only.
 
-```sh
-mise run skills -- list path:../skills-source --tree --explain
-mise run skills -- list path:../skills-source --include tag:web --exclude tag:experimental
-mise run skills -- use git:https://host.example/team/skills.git \
-  'skills/engineering/**' --track main --agent agents
-```
-
-`list` is read-only and does not resolve or install a remote source. It accepts
-local checkout/snapshot directories and can emit stable `--json` output.
-
-## Agent targets
-
-The `--agent` values are authoritative. `codex` and `cursor` are aliases for
-the shared `agents` target, and duplicate operations are coalesced:
+## Agent targets and ownership
 
 | adapter | global target | project target |
 | --- | --- | --- |
-| `agents` (`codex`, `cursor`) | `~/.agents/skills` | `.agents/skills` |
+| `agents`, `codex`, `cursor` | `~/.agents/skills` | `.agents/skills` |
 | `pi` | `~/.pi/agent/skills` | `.pi/skills` |
 | `claude` | `~/.claude/skills` | `.claude/skills` |
 
-Activation is a relative symlink to the installed complete artifact. Sync
-creates, updates, and removes only links owned by the selected config root.
-
-## Lifecycle
-
-```sh
-mise run skills -- use SOURCE SELECTOR --agent pi
-mise install
-mise run skills -- status --json
-mise run skills -- upgrade skills:SOURCE
-mise install
-mise run skills -- sync --locked
-mise run skills -- remove skills:SOURCE SELECTOR
-mise run skills -- prune
-```
-
-- `use` edits source, version, selection, agents, and the postinstall hook;
-- `mise install` installs the immutable artifact through the backend;
-- `sync` verifies the artifact and converges selected links;
-- `status` reports declaration and link state without changing anything;
-- `upgrade` refreshes pins only and never installs or syncs;
-- `remove` removes selected policy or a complete declaration, then delegates
-  normal mise artifact removal when no config references that source+version;
-- `prune` repairs stale links recorded for this config root without creating
-  desired links.
-
-## Ownership, conflicts, and recovery
-
-Ownership state is stored under:
+Activation uses relative symlinks into the immutable mise installation. Each
+selected config root owns only links recorded in:
 
 ```text
 $MISE_STATE_DIR/skills/<config-root-hash>.json
 ```
 
-An existing unmanaged file, directory, or symlink is a conflict. Sync and
-prune report it and leave it untouched. If a managed link is manually changed,
-the change is also treated as a conflict. Restore or remove the target and run
-`sync --locked` to converge it again.
+An existing unmanaged file, directory, or symlink is a collision. `sync` and
+`install` report it and leave it untouched. A changed managed link is also a
+collision. Run `skills doctor` to inspect PATH and mise owners without relying
+on undocumented PATH precedence; use `--accept-collision` only after review.
+`prune` removes stale links recorded for this config and never materializes
+desired links.
 
-If `mise unuse` removes a declaration without invoking this CLI, an owned link
-may become dangling. `status` reports the dangling link and `prune` removes the
-recorded stale link. A local source drift error is repaired by explicit
-`use`/`upgrade`, followed by `mise install` and `sync --locked`.
+## Release compatibility
 
-Useful diagnostics:
+`release-compatibility.json` pairs each CLI release with its minimum mise
+version and exact backend plugin revision. The release workflow builds
+platform assets named `skills_<version>_<target>.*`, checksums them, and can
+publish them only when explicitly enabled. Release publication, tags, and
+live asset verification are deployment steps after review, not performed by
+this checkout.
+
+For strict Agent Skills diagnostics without blocking normal discovery:
 
 ```sh
-mise run skills -- status --json
-mise run skills -- list path:../skills-source --json --explain
-mise run skills -- validate path:../skills-source
-mise run skills -- prune
+skills validate SOURCE --json
 ```
-
-The backend verifies source identity, immutable versions, complete snapshot
-inventory, safe links, and local tree digests. It does not store selectors,
-agent choices, or project ownership in the artifact manifest.

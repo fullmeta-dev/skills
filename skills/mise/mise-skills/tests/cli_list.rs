@@ -8,7 +8,7 @@ fn fixture() -> PathBuf {
 
 #[test]
 fn list_json_exposes_selected_artifacts_and_explanation_data() {
-    let output = Command::new(env!("CARGO_BIN_EXE_mise-skills"))
+    let output = Command::new(env!("CARGO_BIN_EXE_skills"))
         .args([
             "list",
             fixture().to_str().unwrap(),
@@ -18,7 +18,7 @@ fn list_json_exposes_selected_artifacts_and_explanation_data() {
             "tag:repository+nested",
         ])
         .output()
-        .expect("run mise-skills");
+        .expect("run skills");
     assert!(
         output.status.success(),
         "{}",
@@ -33,7 +33,7 @@ fn list_json_exposes_selected_artifacts_and_explanation_data() {
 
 #[test]
 fn list_tree_reports_missing_selectors_without_v1_failure() {
-    let output = Command::new(env!("CARGO_BIN_EXE_mise-skills"))
+    let output = Command::new(env!("CARGO_BIN_EXE_skills"))
         .args([
             "list",
             fixture().to_str().unwrap(),
@@ -42,7 +42,7 @@ fn list_tree_reports_missing_selectors_without_v1_failure() {
             "missing",
         ])
         .output()
-        .expect("run mise-skills");
+        .expect("run skills");
     assert!(output.status.success());
     assert!(String::from_utf8_lossy(&output.stdout).contains("missing include selector"));
     assert!(

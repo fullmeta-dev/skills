@@ -1,8 +1,8 @@
 use crate::config::{Config, ToolInfo};
 use crate::source::{canonical_version, local_pin, validate_subpath, SourceKind, SourceSpec};
-use mise_skills::discover_with_subpath;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use skills::discover_with_subpath;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};

@@ -5,7 +5,7 @@ use std::process::{Command, Output};
 use tempfile::TempDir;
 
 fn binary() -> &'static str {
-    env!("CARGO_BIN_EXE_mise-skills")
+    env!("CARGO_BIN_EXE_skills")
 }
 
 fn run(cwd: &Path, args: &[&str]) -> Output {
@@ -13,7 +13,7 @@ fn run(cwd: &Path, args: &[&str]) -> Output {
         .current_dir(cwd)
         .args(args)
         .output()
-        .expect("run mise-skills")
+        .expect("run skills")
 }
 
 #[test]
@@ -32,6 +32,9 @@ fn documented_commands_have_scope_failure_and_example_help() {
         "sync",
         "status",
         "upgrade",
+        "install",
+        "self-update",
+        "doctor",
         "remove",
         "prune",
         "validate",
@@ -53,10 +56,10 @@ fn documented_commands_have_scope_failure_and_example_help() {
 fn generated_completions_match_checked_in_artifacts() {
     let temp = TempDir::new().unwrap();
     for (shell, relative_path) in [
-        ("bash", "completions/mise-skills.bash"),
-        ("zsh", "completions/_mise-skills"),
-        ("fish", "completions/mise-skills.fish"),
-        ("powershell", "completions/mise-skills.ps1"),
+        ("bash", "completions/skills.bash"),
+        ("zsh", "completions/_skills"),
+        ("fish", "completions/skills.fish"),
+        ("powershell", "completions/skills.ps1"),
     ] {
         let output = run(temp.path(), &["completions", shell]);
         assert!(
@@ -77,9 +80,9 @@ fn generated_completions_match_checked_in_artifacts() {
 fn shipped_completion_shells_are_generated_without_side_effects() {
     let temp = TempDir::new().unwrap();
     for (shell, marker) in [
-        ("bash", "_mise__skills()"),
-        ("zsh", "#compdef mise-skills"),
-        ("fish", "complete -c mise-skills"),
+        ("bash", "_skills()"),
+        ("zsh", "#compdef skills"),
+        ("fish", "complete -c skills"),
         ("powershell", "Register-ArgumentCompleter"),
     ] {
         let output = run(temp.path(), &["completions", shell]);
@@ -93,30 +96,6 @@ fn shipped_completion_shells_are_generated_without_side_effects() {
         );
     }
     assert!(!temp.path().join("mise.toml").exists());
-}
-
-#[test]
-fn bootstrap_artifact_declares_the_complete_global_flow() {
-    let artifact = fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../docs/mise-skills-bootstrap.toml"),
-    )
-    .expect("global mise bootstrap artifact");
-    for required in [
-        "[plugins]",
-        "vfox-backend:skills",
-        "#348a5b2021d1e8b6d398c1da068fee90bb1c3653",
-        "[tools.\"github:fullmeta-dev/skills\"]",
-        "bin = \"mise-skills\"",
-        "[tasks.skills]",
-        "usage_arguments",
-        "[bootstrap.hooks.pre-tools]",
-        "mise-skills-bootstrap-plugin.sh",
-    ] {
-        assert!(
-            artifact.contains(required),
-            "bootstrap artifact missing {required}"
-        );
-    }
 }
 
 #[test]

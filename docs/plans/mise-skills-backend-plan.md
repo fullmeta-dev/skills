@@ -1,8 +1,13 @@
 # Plan: mise-managed Agent Skills
 
+> Historical milestones 0-6. The supported public lifecycle is now the direct
+> `skills` executable described in [`docs/mise-skills.md`](../mise-skills.md);
+> the old task/bootstrap examples below are retained only as implementation
+> history and are not supported interfaces.
+
 ## Status
 
-Final design for review before implementation.
+Superseded by issue #7 implementation.
 
 This project adds a real **vfox backend plugin** for immutable skill-source
 snapshots and a small **`mise-skills` CLI** for skill-specific commands. It
