@@ -221,6 +221,13 @@ mise_cmd run skills --help >"$WORK_DIR/task-help.txt"
 run_skills --help >"$WORK_DIR/cli-help.txt"
 grep -Fq 'Manage Agent Skills' "$WORK_DIR/task-help.txt"
 grep -Fq 'Normal behavior:' "$WORK_DIR/cli-help.txt"
+for shell in bash zsh fish powershell; do
+    run_skills completions "$shell" >"$WORK_DIR/completion-$shell"
+done
+grep -Fq '_mise__skills' "$WORK_DIR/completion-bash"
+grep -Fq '#compdef mise-skills' "$WORK_DIR/completion-zsh"
+grep -Fq 'complete -c mise-skills' "$WORK_DIR/completion-fish"
+grep -Fq 'Register-ArgumentCompleter' "$WORK_DIR/completion-powershell"
 
 printf '4/8 task configures a project, then real mise installs the backend artifact\n'
 SOURCE_ARG="path:$SOURCE_DIR"
