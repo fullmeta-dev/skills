@@ -6,7 +6,7 @@
     "0.1.0": {
       "minimum_mise": "2026.6.14",
       "plugin_url": "https://github.com/fullmeta-dev/skills.git",
-      "plugin_revision": "348a5b2021d1e8b6d398c1da068fee90bb1c3653",
+      "plugin_revision": "f52eab81df0c85369af83b1dee276b88e7b81f26",
       "asset_pattern": "skills_*"
     }
   }
