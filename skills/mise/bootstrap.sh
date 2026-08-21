@@ -2,9 +2,14 @@
 # Install the pinned mise-skills global config and bootstrap it with mise.
 set -Eeuo pipefail
 
-# The bootstrap script itself is pinned by the README URL. The downloaded
-# config pins the plugin and is the release artifact users review.
-REPOSITORY="https://raw.githubusercontent.com/fullmeta-dev/skills/main"
+# README passes the same immutable ref used to fetch this script.
+if [[ $# -ne 1 || -z "${1:-}" ]]; then
+    printf 'usage: bootstrap.sh <immutable-ref>\n' >&2
+    exit 2
+fi
+BOOTSTRAP_REF="$1"
+BASE_URL="${MISE_SKILLS_BOOTSTRAP_BASE_URL:-https://raw.githubusercontent.com/fullmeta-dev/skills}"
+REPOSITORY="${BASE_URL%/}/$BOOTSTRAP_REF"
 CONFIG_DIR="${MISE_CONFIG_DIR:-${XDG_CONFIG_HOME:-${HOME:?}/.config}/mise}"
 mkdir -p "$CONFIG_DIR"
 curl --fail --location --silent --show-error \

@@ -37,6 +37,15 @@ Use `MISE_SKILLS_LATEST_MISE_VERSION` or the binary override variables from
 `run.sh --help` when reproducing a release-specific result. Set
 `MISE_SKILLS_KEEP_TEMP=1` to inspect a failed fixture.
 
+Run the isolated public bootstrap ref-pinning regression with:
+
+```sh
+skills/mise/mise-skills-tests/bootstrap_test.sh
+```
+
+It serves both bootstrap artifacts from a local immutable-ref fixture and
+asserts that every fetch uses the supplied ref rather than `main`.
+
 Run the backend-only source snapshot checks with:
 
 ```sh
