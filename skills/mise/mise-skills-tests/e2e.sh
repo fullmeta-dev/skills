@@ -42,6 +42,10 @@ tags: [web]
 # Demo
 EOF
 printf 'fixture\n' > "$SOURCE_DIR/skills/demo/reference.txt"
+for skipped in .git node_modules dist build __pycache__ .mise-skills-manifest.json .skills-backend; do
+    mkdir -p "$SOURCE_DIR/$skipped"
+    printf 'ignored by the source tree digest\n' > "$SOURCE_DIR/$skipped/ignored.txt"
+done
 
 export HOME="$HOME_DIR" MISE_CONFIG_DIR="$CONFIG_DIR" MISE_DATA_DIR="$DATA_DIR"
 export MISE_STATE_DIR="$STATE_DIR" MISE_CACHE_DIR="$CACHE_DIR" MISE_BIN
@@ -62,6 +66,11 @@ grep -Fq 'skills sync --locked' "$PROJECT_DIR/mise.toml"
 printf 'public binary and normal mise install\n'
 "$CLI_BIN" install --path "$PROJECT_DIR/mise.toml"
 for target in "$PROJECT_DIR/.agents/skills/demo" "$PROJECT_DIR/.pi/skills/demo" "$PROJECT_DIR/.claude/skills/demo"; do [[ -L "$target" ]]; done
+INSTALL_DIR="$DATA_DIR/installs/skills-local-source"/tree-*
+for skipped in .git node_modules dist build __pycache__ .mise-skills-manifest.json .skills-backend; do
+    [[ ! -e "$INSTALL_DIR/$skipped" ]]
+done
+"$CLI_BIN" list "$SOURCE_ARG" --json | grep -Fq '"demo"'
 "$CLI_BIN" status --path "$PROJECT_DIR/mise.toml" --json | grep -Fq '"active"'
 
 printf 'locked local drift and explicit source upgrade\n'

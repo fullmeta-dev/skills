@@ -5,6 +5,16 @@ use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use walkdir::WalkDir;
 
+pub(crate) const TREE_DIGEST_EXCLUDED_DIRECTORIES: &[&str] = &[
+    ".git",
+    "node_modules",
+    "dist",
+    "build",
+    "__pycache__",
+    ".mise-skills-manifest.json",
+    ".skills-backend",
+];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceKind {
     Path,
@@ -416,16 +426,8 @@ fn executable(path: &Path) -> Result<bool, String> {
 
 fn should_skip(path: &Path) -> bool {
     path.file_name().is_some_and(|name| {
-        matches!(
-            name.to_str(),
-            Some(".git")
-                | Some("node_modules")
-                | Some("dist")
-                | Some("build")
-                | Some("__pycache__")
-                | Some(".mise-skills-manifest.json")
-                | Some(".skills-backend")
-        )
+        name.to_str()
+            .is_some_and(|name| TREE_DIGEST_EXCLUDED_DIRECTORIES.contains(&name))
     })
 }
 
@@ -614,15 +616,21 @@ mod tests {
     }
 
     #[test]
-    fn local_digest_changes_with_content_but_ignores_git() {
+    fn local_digest_changes_with_content_but_ignores_backend_exclusions() {
         let temp = TempDir::new().unwrap();
-        fs::create_dir(temp.path().join(".git")).unwrap();
         fs::write(temp.path().join("skill.txt"), "one").unwrap();
         let source =
             SourceSpec::parse(&format!("path:{}", temp.path().display()), temp.path()).unwrap();
         let first = local_pin(&source, "").unwrap();
-        fs::write(temp.path().join(".git").join("ignored"), "ignored").unwrap();
-        assert_eq!(first, local_pin(&source, "").unwrap());
+        for directory in TREE_DIGEST_EXCLUDED_DIRECTORIES {
+            fs::create_dir_all(temp.path().join(directory).join("nested")).unwrap();
+            fs::write(
+                temp.path().join(directory).join("nested/ignored"),
+                "ignored",
+            )
+            .unwrap();
+            assert_eq!(first, local_pin(&source, "").unwrap(), "{directory}");
+        }
         fs::write(temp.path().join("skill.txt"), "two").unwrap();
         assert_ne!(first, local_pin(&source, "").unwrap());
     }

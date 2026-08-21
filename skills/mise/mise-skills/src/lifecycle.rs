@@ -135,8 +135,21 @@ pub fn validate_agent(value: &str) -> Result<(), String> {
 }
 
 pub fn sync(config: &Config, global: bool) -> Result<SyncReport, String> {
-    let mut manifest = load_manifest(&config.root)?;
+    let manifest = load_manifest(&config.root, global)?;
     let desired = desired_links(config, global)?;
+    let snapshots = link_snapshots(&manifest, &desired);
+    let manifest_snapshot = snapshot_manifest_file(&config.root)?;
+    match sync_changes(config, manifest, desired) {
+        Ok(report) => Ok(report),
+        Err(error) => Err(rollback_error(error, &snapshots, &manifest_snapshot)),
+    }
+}
+
+fn sync_changes(
+    config: &Config,
+    mut manifest: OwnershipManifest,
+    desired: BTreeMap<LinkKey, DesiredLink>,
+) -> Result<SyncReport, String> {
     let mut report = SyncReport::default();
     let old_links: BTreeMap<LinkKey, OwnedLink> = manifest
         .links
@@ -200,10 +213,31 @@ pub fn sync(config: &Config, global: bool) -> Result<SyncReport, String> {
 }
 
 pub fn prune(config: &Config, global: bool) -> Result<SyncReport, String> {
-    let mut manifest = load_manifest(&config.root)?;
+    let manifest = load_manifest(&config.root, global)?;
     let desired_result = desired_links_report(config, global);
     let declared_tools = crate::config::skill_tools(&config.document)?;
     let desired_keys: BTreeSet<LinkKey> = desired_result.links.keys().cloned().collect();
+    let snapshots = link_snapshots(&manifest, &desired_result.links);
+    let manifest_snapshot = snapshot_manifest_file(&config.root)?;
+    match prune_changes(
+        config,
+        manifest,
+        desired_result,
+        declared_tools,
+        desired_keys,
+    ) {
+        Ok(report) => Ok(report),
+        Err(error) => Err(rollback_error(error, &snapshots, &manifest_snapshot)),
+    }
+}
+
+fn prune_changes(
+    config: &Config,
+    mut manifest: OwnershipManifest,
+    desired_result: DesiredReport,
+    declared_tools: Vec<ToolInfo>,
+    desired_keys: BTreeSet<LinkKey>,
+) -> Result<SyncReport, String> {
     let mut report = SyncReport::default();
     let mut next_links = BTreeMap::new();
     for link in manifest.links {
@@ -238,7 +272,7 @@ pub fn prune(config: &Config, global: bool) -> Result<SyncReport, String> {
 }
 
 pub fn status(config: &Config, global: bool) -> Result<StatusReport, String> {
-    let manifest = load_manifest(&config.root)?;
+    let manifest = load_manifest(&config.root, global)?;
     let desired_result = desired_links_report(config, global);
     let mut links = Vec::new();
     let mut diagnostics = desired_result.diagnostics;
@@ -316,6 +350,152 @@ pub fn status(config: &Config, global: bool) -> Result<StatusReport, String> {
             .then_with(|| left.target.cmp(&right.target))
     });
     Ok(StatusReport { links, diagnostics })
+}
+
+#[derive(Debug)]
+struct LinkSnapshot {
+    target: PathBuf,
+    state: SnapshotState,
+}
+
+#[derive(Debug)]
+enum SnapshotState {
+    Missing,
+    Symlink(PathBuf),
+    Other,
+}
+
+#[derive(Debug)]
+struct ManifestFileSnapshot {
+    path: PathBuf,
+    contents: Option<Vec<u8>>,
+}
+
+fn link_snapshots(
+    manifest: &OwnershipManifest,
+    desired: &BTreeMap<LinkKey, DesiredLink>,
+) -> Vec<LinkSnapshot> {
+    let mut targets = BTreeSet::new();
+    targets.extend(
+        manifest
+            .links
+            .iter()
+            .map(|link| PathBuf::from(&link.target)),
+    );
+    targets.extend(desired.values().map(|link| link.target.clone()));
+    targets
+        .into_iter()
+        .map(|target| {
+            let state = match symlink_target(&target) {
+                TargetState::Missing => SnapshotState::Missing,
+                TargetState::Other => SnapshotState::Other,
+                TargetState::Symlink(link) => SnapshotState::Symlink(link),
+            };
+            LinkSnapshot { target, state }
+        })
+        .collect()
+}
+
+fn snapshot_manifest_file(config_root: &Path) -> Result<ManifestFileSnapshot, String> {
+    let path = state_manifest_path(config_root)?;
+    let contents = match fs::read(&path) {
+        Ok(contents) => Some(contents),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => {
+            return Err(format!(
+                "cannot snapshot ownership manifest {}: {error}",
+                path.display()
+            ))
+        }
+    };
+    Ok(ManifestFileSnapshot { path, contents })
+}
+
+fn rollback_error(
+    error: String,
+    snapshots: &[LinkSnapshot],
+    manifest_snapshot: &ManifestFileSnapshot,
+) -> String {
+    let mut rollback_errors = Vec::new();
+    if let Err(rollback) = restore_links(snapshots) {
+        rollback_errors.push(rollback);
+    }
+    if let Err(rollback) = restore_manifest_file(manifest_snapshot) {
+        rollback_errors.push(rollback);
+    }
+    if rollback_errors.is_empty() {
+        error
+    } else {
+        format!("{error}; rollback failed: {}", rollback_errors.join("; "))
+    }
+}
+
+fn restore_links(snapshots: &[LinkSnapshot]) -> Result<(), String> {
+    let mut errors = Vec::new();
+    for snapshot in snapshots {
+        let result = match &snapshot.state {
+            SnapshotState::Missing => match symlink_target(&snapshot.target) {
+                TargetState::Missing => Ok(()),
+                TargetState::Symlink(_) => remove_link(&snapshot.target),
+                TargetState::Other => Err(format!(
+                    "cannot restore missing link {}; target became unmanaged",
+                    snapshot.target.display()
+                )),
+            },
+            SnapshotState::Symlink(link) => match symlink_target(&snapshot.target) {
+                TargetState::Missing => create_symlink(link, &snapshot.target),
+                TargetState::Symlink(actual) if actual == *link => Ok(()),
+                TargetState::Symlink(_) => {
+                    remove_link(&snapshot.target)?;
+                    create_symlink(link, &snapshot.target)
+                }
+                TargetState::Other => Err(format!(
+                    "cannot restore managed link {}; target became unmanaged",
+                    snapshot.target.display()
+                )),
+            },
+            SnapshotState::Other => Ok(()),
+        };
+        if let Err(error) = result {
+            errors.push(error);
+        }
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
+    }
+}
+
+fn restore_manifest_file(snapshot: &ManifestFileSnapshot) -> Result<(), String> {
+    match &snapshot.contents {
+        Some(contents) => {
+            let parent = snapshot
+                .path
+                .parent()
+                .ok_or_else(|| "ownership manifest has no parent".to_string())?;
+            fs::create_dir_all(parent).map_err(|error| {
+                format!(
+                    "cannot restore state directory {}: {error}",
+                    parent.display()
+                )
+            })?;
+            fs::write(&snapshot.path, contents).map_err(|error| {
+                format!(
+                    "cannot restore ownership manifest {}: {error}",
+                    snapshot.path.display()
+                )
+            })
+        }
+        None => match fs::remove_file(&snapshot.path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(format!(
+                "cannot remove failed ownership manifest {}: {error}",
+                snapshot.path.display()
+            )),
+        },
+    }
 }
 
 fn desired_links(config: &Config, global: bool) -> Result<BTreeMap<LinkKey, DesiredLink>, String> {
@@ -561,31 +741,35 @@ fn symlink_target(path: &Path) -> TargetState {
 }
 
 fn create_link(desired: &DesiredLink) -> Result<(), String> {
-    if let Some(parent) = desired.target.parent() {
+    create_symlink(&desired.link, &desired.target)
+}
+
+fn create_symlink(link: &Path, target: &Path) -> Result<(), String> {
+    if let Some(parent) = target.parent() {
         fs::create_dir_all(parent)
             .map_err(|error| format!("cannot create adapter root {}: {error}", parent.display()))?;
     }
     #[cfg(unix)]
     {
-        std::os::unix::fs::symlink(&desired.link, &desired.target).map_err(|error| {
+        std::os::unix::fs::symlink(link, target).map_err(|error| {
             format!(
                 "cannot create relative skill link {}: {error}",
-                desired.target.display()
+                target.display()
             )
         })
     }
     #[cfg(windows)]
     {
-        std::os::windows::fs::symlink_dir(&desired.link, &desired.target).map_err(|error| {
+        std::os::windows::fs::symlink_dir(link, target).map_err(|error| {
             format!(
                 "cannot create relative skill link {}: {error}",
-                desired.target.display()
+                target.display()
             )
         })
     }
     #[cfg(not(any(unix, windows)))]
     {
-        let _ = desired;
+        let _ = (link, target);
         Err("skill links are unsupported on this platform".to_string())
     }
 }
@@ -952,27 +1136,147 @@ fn state_manifest_path(config_root: &Path) -> Result<PathBuf, String> {
     Ok(state.join("skills").join(format!("{hash}.json")))
 }
 
-fn load_manifest(config_root: &Path) -> Result<OwnershipManifest, String> {
+fn load_manifest(config_root: &Path, global: bool) -> Result<OwnershipManifest, String> {
     let path = state_manifest_path(config_root)?;
-    match fs::read_to_string(&path) {
+    let manifest = match fs::read_to_string(&path) {
         Ok(contents) => serde_json::from_str(&contents).map_err(|error| {
             format!(
                 "cannot parse ownership manifest {}: {error}",
                 path.display()
             )
-        }),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(OwnershipManifest {
+        })?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => OwnershipManifest {
             config_root: config_root.display().to_string(),
             ..OwnershipManifest::default()
-        }),
-        Err(error) => Err(format!(
-            "cannot read ownership manifest {}: {error}",
-            path.display()
-        )),
+        },
+        Err(error) => {
+            return Err(format!(
+                "cannot read ownership manifest {}: {error}",
+                path.display()
+            ))
+        }
+    };
+    validate_ownership_manifest(&manifest, config_root, global)?;
+    Ok(manifest)
+}
+
+fn validate_ownership_manifest(
+    manifest: &OwnershipManifest,
+    config_root: &Path,
+    global: bool,
+) -> Result<(), String> {
+    if manifest.schema_version != 1 {
+        return Err(format!(
+            "unsupported ownership manifest schema {}",
+            manifest.schema_version
+        ));
     }
+    let expected_root = normalize_absolute_path(config_root)?;
+    let recorded_root =
+        normalize_absolute_path(Path::new(&manifest.config_root)).map_err(|_| {
+            format!(
+                "ownership manifest config_root is not an absolute path: {}",
+                manifest.config_root
+            )
+        })?;
+    if recorded_root != expected_root {
+        return Err(format!(
+            "ownership manifest config_root {} does not match {}",
+            manifest.config_root,
+            config_root.display()
+        ));
+    }
+
+    let mut seen = BTreeSet::new();
+    for link in &manifest.links {
+        let adapter = Adapter::parse(&link.adapter)?;
+        let adapter_root = adapter.root(global, config_root)?;
+        let target = validate_owned_target(&link.target, &adapter_root).map_err(|error| {
+            format!(
+                "ownership manifest link {} has unsafe target: {error}",
+                link.target
+            )
+        })?;
+        let key = (adapter.id().to_string(), target);
+        if !seen.insert(key) {
+            return Err(format!(
+                "ownership manifest contains duplicate target {}",
+                link.target
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn normalize_absolute_path(path: &Path) -> Result<PathBuf, String> {
+    if !path.is_absolute() {
+        return Err(format!("path is not absolute: {}", path.display()));
+    }
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            Component::RootDir => normalized.push(std::path::MAIN_SEPARATOR.to_string()),
+            Component::CurDir => {}
+            Component::Normal(part) => normalized.push(part),
+            Component::ParentDir => {
+                if !normalized.pop() {
+                    return Err(format!("path escapes its root: {}", path.display()));
+                }
+            }
+        }
+    }
+    Ok(normalized)
+}
+
+fn validate_owned_target(target: &str, adapter_root: &Path) -> Result<PathBuf, String> {
+    let target = normalize_absolute_path(Path::new(target))?;
+    let adapter_root = normalize_absolute_path(adapter_root)?;
+    if target == adapter_root || !target.starts_with(&adapter_root) {
+        return Err(format!(
+            "target {} is outside adapter root {}",
+            target.display(),
+            adapter_root.display()
+        ));
+    }
+
+    // A symlinked parent can make a lexically safe path point outside the
+    // adapter root. Resolve the nearest existing ancestor before allowing
+    // deletion of this persisted target.
+    let canonical_root = fs::canonicalize(&adapter_root).unwrap_or_else(|_| adapter_root.clone());
+    let mut ancestor = target.parent();
+    while let Some(path) = ancestor {
+        if path == adapter_root {
+            // The adapter root itself may have been removed after the last
+            // link was pruned; no existing parent remains to resolve.
+            break;
+        }
+        if path.exists() {
+            let canonical = fs::canonicalize(path).map_err(|error| {
+                format!("cannot resolve target parent {}: {error}", path.display())
+            })?;
+            if !canonical.starts_with(&canonical_root) {
+                return Err(format!(
+                    "target parent {} escapes adapter root {}",
+                    path.display(),
+                    adapter_root.display()
+                ));
+            }
+            break;
+        }
+        ancestor = path.parent();
+    }
+    Ok(target)
 }
 
 fn save_manifest(config_root: &Path, manifest: &OwnershipManifest) -> Result<(), String> {
+    if std::env::var("MISE_SKILLS_FAIL_MANIFEST_WRITE")
+        .ok()
+        .as_deref()
+        == Some("1")
+    {
+        return Err("injected ownership manifest persistence failure".into());
+    }
     let path = state_manifest_path(config_root)?;
     if manifest.links.is_empty() {
         match fs::remove_file(&path) {
@@ -1003,12 +1307,14 @@ fn save_manifest(config_root: &Path, manifest: &OwnershipManifest) -> Result<(),
             temporary.display()
         )
     })?;
-    fs::rename(&temporary, &path).map_err(|error| {
-        format!(
+    if let Err(error) = fs::rename(&temporary, &path) {
+        let _ = fs::remove_file(&temporary);
+        return Err(format!(
             "cannot replace ownership manifest {}: {error}",
             path.display()
-        )
-    })
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1053,6 +1359,53 @@ mod tests {
         )
         .unwrap();
         verify_artifact(&artifact, &version, &source).unwrap();
+    }
+
+    #[test]
+    fn rejects_untrusted_ownership_manifest_metadata_before_deletion() {
+        let temp = TempDir::new().unwrap();
+        let config_root = temp.path().join("project");
+        fs::create_dir_all(&config_root).unwrap();
+        let target = config_root.join(".pi/skills/demo");
+        let valid = OwnershipManifest {
+            schema_version: 1,
+            config_root: config_root.display().to_string(),
+            links: vec![OwnedLink {
+                tool: "skills:local/source".into(),
+                adapter: "pi".into(),
+                skill: "demo".into(),
+                target: target.display().to_string(),
+                link: "../../artifact/demo".into(),
+                source: "artifact/demo".into(),
+                version: "tree-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    .into(),
+            }],
+        };
+        validate_ownership_manifest(&valid, &config_root, false).unwrap();
+
+        let mut invalid = valid.clone();
+        invalid.schema_version = 2;
+        assert!(validate_ownership_manifest(&invalid, &config_root, false)
+            .unwrap_err()
+            .contains("unsupported ownership manifest schema"));
+
+        let mut invalid = valid.clone();
+        invalid.config_root = temp.path().join("other").display().to_string();
+        assert!(validate_ownership_manifest(&invalid, &config_root, false)
+            .unwrap_err()
+            .contains("config_root"));
+
+        let mut invalid = valid.clone();
+        invalid.links[0].adapter = "unknown".into();
+        assert!(validate_ownership_manifest(&invalid, &config_root, false)
+            .unwrap_err()
+            .contains("unsupported agent"));
+
+        let mut invalid = valid;
+        invalid.links[0].target = temp.path().join("outside").display().to_string();
+        assert!(validate_ownership_manifest(&invalid, &config_root, false)
+            .unwrap_err()
+            .contains("outside adapter root"));
     }
 
     #[test]

@@ -8,9 +8,21 @@ fn binary() -> &'static str {
 }
 
 fn run(cwd: &Path, args: &[&str], envs: &[(&str, &Path)]) -> Output {
+    run_with(cwd, args, envs, &[])
+}
+
+fn run_with(
+    cwd: &Path,
+    args: &[&str],
+    envs: &[(&str, &Path)],
+    extra_envs: &[(&str, &str)],
+) -> Output {
     let mut command = Command::new(binary());
     command.current_dir(cwd).args(args);
     for (key, value) in envs {
+        command.env(key, value);
+    }
+    for (key, value) in extra_envs {
         command.env(key, value);
     }
     command.output().expect("run skills")
@@ -532,6 +544,121 @@ fn remove_uninstalls_only_after_the_last_declaration_reference() {
         !artifact.exists(),
         "the final scoped removal should delegate artifact cleanup to mise"
     );
+}
+
+#[test]
+fn manifest_persistence_failure_rolls_back_sync_and_prune() {
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source");
+    let project = temp.path().join("project");
+    let data = temp.path().join("data");
+    let state = temp.path().join("state");
+    let home = temp.path().join("home");
+    for directory in [&source, &project, &data, &state, &home] {
+        fs::create_dir_all(directory).unwrap();
+    }
+    skill(&source, "demo");
+    let config = project.join("mise.toml");
+    let source_arg = format!("path:{}", source.display());
+    let envs = [
+        ("HOME", home.as_path()),
+        ("MISE_DATA_DIR", data.as_path()),
+        ("MISE_STATE_DIR", state.as_path()),
+    ];
+    let output = run(
+        &project,
+        &[
+            "use",
+            "--path",
+            config.to_str().unwrap(),
+            &source_arg,
+            "demo",
+            "--agent",
+            "pi",
+        ],
+        &envs,
+    );
+    assert!(output.status.success());
+    let first_version = version(&config);
+    let first_artifact = install_snapshot(&data, &first_version, &source);
+    let output = run(
+        &project,
+        &["sync", "--path", config.to_str().unwrap(), "--locked"],
+        &envs,
+    );
+    assert!(output.status.success());
+    let demo_target = project.join(".pi/skills/demo");
+    let manifest_path = fs::read_dir(state.join("skills"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let original_manifest = fs::read(&manifest_path).unwrap();
+
+    skill(&source, "two");
+    let output = run(
+        &project,
+        &[
+            "use",
+            "--path",
+            config.to_str().unwrap(),
+            &source_arg,
+            "demo",
+            "two",
+            "--agent",
+            "pi",
+        ],
+        &envs,
+    );
+    assert!(output.status.success());
+    let second_version = version(&config);
+    let second_artifact = install_snapshot(&data, &second_version, &source);
+    let output = run_with(
+        &project,
+        &["sync", "--path", config.to_str().unwrap(), "--locked"],
+        &envs,
+        &[("MISE_SKILLS_FAIL_MANIFEST_WRITE", "1")],
+    );
+    assert!(!output.status.success());
+    assert_eq!(
+        fs::canonicalize(&demo_target).unwrap(),
+        fs::canonicalize(first_artifact.join("demo")).unwrap()
+    );
+    assert!(!project.join(".pi/skills/two").exists());
+    assert_eq!(fs::read(&manifest_path).unwrap(), original_manifest);
+    assert!(!fs::canonicalize(&demo_target)
+        .unwrap()
+        .starts_with(&second_artifact));
+
+    let output = run(
+        &project,
+        &["sync", "--path", config.to_str().unwrap(), "--locked"],
+        &envs,
+    );
+    assert!(output.status.success());
+    fs::write(&config, "").unwrap();
+    let manifest_after_sync = fs::read(&manifest_path).unwrap();
+    let output = run_with(
+        &project,
+        &["prune", "--path", config.to_str().unwrap()],
+        &envs,
+        &[("MISE_SKILLS_FAIL_MANIFEST_WRITE", "1")],
+    );
+    assert!(!output.status.success());
+    assert!(demo_target.is_symlink());
+    assert!(project.join(".pi/skills/two").is_symlink());
+    assert_eq!(fs::read(&manifest_path).unwrap(), manifest_after_sync);
+
+    let output = run(
+        &project,
+        &["prune", "--path", config.to_str().unwrap()],
+        &envs,
+    );
+    assert!(output.status.success());
+    assert!(!demo_target.exists());
+    assert!(!project.join(".pi/skills/two").exists());
+    assert!(!manifest_path.exists());
 }
 
 #[test]

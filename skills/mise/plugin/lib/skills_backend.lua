@@ -3,6 +3,25 @@ local json = require("json")
 
 local backend = {}
 
+-- Keep this list aligned with source.rs' local tree digest exclusions.
+local TREE_DIGEST_EXCLUDED_DIRECTORIES = {
+    ".git",
+    "node_modules",
+    "dist",
+    "build",
+    "__pycache__",
+    ".mise-skills-manifest.json",
+    ".skills-backend",
+}
+local TREE_DIGEST_PRUNE = "\\( "
+for index, name in ipairs(TREE_DIGEST_EXCLUDED_DIRECTORIES) do
+    if index > 1 then
+        TREE_DIGEST_PRUNE = TREE_DIGEST_PRUNE .. " -o "
+    end
+    TREE_DIGEST_PRUNE = TREE_DIGEST_PRUNE .. "-name " .. name
+end
+TREE_DIGEST_PRUNE = TREE_DIGEST_PRUNE .. " \\)"
+
 local function fail(message)
     error("skills backend: " .. message)
 end
@@ -303,7 +322,7 @@ set -o pipefail
 export LC_ALL=C
 root=$1
 root_real=$(realpath "$root")
-find "$root" \( -name .git -o -name .mise-skills-manifest.json -o -name .skills-backend \) -prune -o \
+find "$root" TREE_DIGEST_PRUNE -prune -o \
     -type l -print0 | while IFS= read -r -d '' link; do
     target=$(readlink "$link")
     if [ -z "$target" ]; then
@@ -321,6 +340,7 @@ find "$root" \( -name .git -o -name .mise-skills-manifest.json -o -name .skills-
     esac
 done
 ]]
+    script = script:gsub("TREE_DIGEST_PRUNE", TREE_DIGEST_PRUNE)
     local command = "bash -c " .. quote(script .. "\n") .. " -- " .. quote(root)
     local ok, output = try_run(command)
     if not ok then
@@ -335,7 +355,7 @@ set -eu
 set -o pipefail
 export LC_ALL=C
 root=$1
-find "$root" -mindepth 1 \( -name .git -o -name .mise-skills-manifest.json -o -name .skills-backend \) -prune -o -print0 |
+find "$root" -mindepth 1 TREE_DIGEST_PRUNE -prune -o -print0 |
     sort -z |
     while IFS= read -r -d '' path; do
         rel=${path#"$root"/}
@@ -371,6 +391,7 @@ find "$root" -mindepth 1 \( -name .git -o -name .mise-skills-manifest.json -o -n
     (command -v sha256sum >/dev/null 2>&1 && sha256sum || shasum -a 256) |
     awk '{print $1}'
 ]]
+    script = script:gsub("TREE_DIGEST_PRUNE", TREE_DIGEST_PRUNE)
     local command = "bash -c " .. quote(script .. "\n") .. " -- " .. quote(root)
     return trim(run(command))
 end
@@ -389,8 +410,7 @@ local function copy_snapshot(source_root, destination)
     ensure_directory(destination)
     run("cp -a " .. quote(path_join(source_root, ".")) .. " " .. quote(destination))
     run("find " .. quote(destination) .. " -mindepth 1 "
-        .. "\\( -name .git -o -name .mise-skills-manifest.json "
-        .. "-o -name .skills-backend \\) -prune -exec rm -rf -- {} \\;")
+        .. TREE_DIGEST_PRUNE .. " -prune -exec rm -rf -- {} \\;")
 end
 
 local function source_subroot(root, subpath)
@@ -455,9 +475,8 @@ end
 
 local function discover_skills(root)
     local output = run("find " .. quote(root)
-        .. " -type d \\( -name .git -o -name node_modules -o -name dist "
-        .. "-o -name build -o -name __pycache__ -o -name .mise-skills-manifest.json "
-        .. "-o -name .skills-backend \\) -prune -o -type f -name SKILL.md -print | sort")
+        .. " -type d " .. TREE_DIGEST_PRUNE
+        .. " -prune -o -type f -name SKILL.md -print | sort")
     local skills = {}
     for _, path in ipairs(split_lines(output)) do
         local directory = path_dirname(path)
