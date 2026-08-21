@@ -158,6 +158,10 @@ else
 fi
 is_semver "$version" || { echo "release: calculated version is invalid: $version" >&2; exit 1; }
 tag="v$version"
+initial_release=false
+if [[ "$resume" != "true" && -n "$requested_version" && "$current_version" == "$version" ]]; then
+    initial_release=true
+fi
 
 # Read-only preflight. Fetch and credential checks happen before any tracked
 # file is written, commit is made, tag is created, or remote is pushed.
@@ -229,10 +233,10 @@ if [[ "$resume" == "true" ]]; then
         exit 1
     }
 else
-    [[ "$current_version" != "$version" ]] || {
+    if [[ "$initial_release" != "true" && "$current_version" == "$version" ]]; then
         echo "release: target version $version is already the Cargo version; choose another bump or --resume" >&2
         exit 1
-    }
+    fi
 fi
 
 workflow_command=(gh workflow run release.yml --repo fullmeta-dev/skills --ref "$tag")
@@ -245,6 +249,8 @@ echo "  tag: $tag"
 if [[ "$resume" == "true" ]]; then
     echo "  mode: resume/publish existing pushed tag"
     echo "  action: dispatch workflow at $tag"
+elif [[ "$initial_release" == "true" ]]; then
+    echo "  action: create annotated tag $tag on the existing current commit and push main and $tag"
 else
     echo "  action: update Cargo.toml and Cargo.lock, validate, commit $release_commit, create annotated tag, push main and $tag"
 fi
@@ -261,22 +267,28 @@ confirm() {
 }
 
 if [[ "$resume" != "true" ]]; then
-    if ! confirm "Create and push the release commit and annotated tag $tag?"; then
+    if [[ "$initial_release" == "true" ]]; then
+        confirm_prompt="Create and push the annotated tag $tag on the existing current commit?"
+    else
+        confirm_prompt="Create and push the release commit and annotated tag $tag?"
+    fi
+    if ! confirm "$confirm_prompt"; then
         echo "release: cancelled before changing files" >&2
         exit 0
     fi
 
-    prepared=false
-    committed=false
-    restore_failed_preparation() {
-        if [[ "$prepared" == "true" && "$committed" != "true" ]]; then
-            git restore --source=HEAD --staged --worktree -- "$cargo_manifest" "$cargo_lock" 2>/dev/null || true
-            echo "release: preparation failed; restored Cargo files" >&2
-        fi
-    }
-    trap restore_failed_preparation ERR
+    if [[ "$initial_release" != "true" ]]; then
+        prepared=false
+        committed=false
+        restore_failed_preparation() {
+            if [[ "$prepared" == "true" && "$committed" != "true" ]]; then
+                git restore --source=HEAD --staged --worktree -- "$cargo_manifest" "$cargo_lock" 2>/dev/null || true
+                echo "release: preparation failed; restored Cargo files" >&2
+            fi
+        }
+        trap restore_failed_preparation ERR
 
-    python3 - "$cargo_manifest" "$version" <<'PY'
+        python3 - "$cargo_manifest" "$version" <<'PY'
 import re
 import sys
 from pathlib import Path
@@ -298,28 +310,33 @@ if count != 1:
     raise SystemExit("Cargo.toml [package] table has no version")
 path.write_text(text[:match.start(2)] + updated + text[match.end(2):], encoding="utf-8")
 PY
-    prepared=true
+        prepared=true
 
-    # Cargo is the authority for lockfile refresh. Verify that it changed only
-    # the package version and then validate the package with the refreshed lock.
-    cargo check --manifest-path "$cargo_manifest"
-    cargo test --manifest-path "$cargo_manifest" --locked
-    changed_files="$(git diff --name-only)"
-    expected_files=$'skills/mise/mise-skills/Cargo.lock\nskills/mise/mise-skills/Cargo.toml'
-    if [[ "$changed_files" != "$expected_files" && "$changed_files" != $'skills/mise/mise-skills/Cargo.toml\nskills/mise/mise-skills/Cargo.lock' ]]; then
-        echo "release: version preparation changed unexpected files:" >&2
-        printf '%s\n' "$changed_files" >&2
-        exit 1
+        # Cargo is the authority for lockfile refresh. Verify that it changed only
+        # the package version and then validate the package with the refreshed lock.
+        cargo check --manifest-path "$cargo_manifest"
+        cargo test --manifest-path "$cargo_manifest" --locked
+        changed_files="$(git diff --name-only)"
+        expected_files=$'skills/mise/mise-skills/Cargo.lock\nskills/mise/mise-skills/Cargo.toml'
+        if [[ "$changed_files" != "$expected_files" && "$changed_files" != $'skills/mise/mise-skills/Cargo.toml\nskills/mise/mise-skills/Cargo.lock' ]]; then
+            echo "release: version preparation changed unexpected files:" >&2
+            printf '%s\n' "$changed_files" >&2
+            exit 1
+        fi
+        git diff --check
+        git add -- "$cargo_manifest" "$cargo_lock"
+        git commit -m "$release_commit"
+        committed=true
+        trap - ERR
     fi
-    git diff --check
-    git add -- "$cargo_manifest" "$cargo_lock"
-    git commit -m "$release_commit"
-    committed=true
-    trap - ERR
     git tag -a "$tag" -m "$release_commit"
     git push origin main
     git push origin "$tag"
-    echo "release: pushed $release_commit and $tag"
+    if [[ "$initial_release" == "true" ]]; then
+        echo "release: pushed $tag for the existing current commit"
+    else
+        echo "release: pushed $release_commit and $tag"
+    fi
 fi
 
 if ! confirm "Dispatch the external GitHub release workflow for $tag?"; then

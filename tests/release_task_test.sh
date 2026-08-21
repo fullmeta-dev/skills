@@ -86,7 +86,35 @@ esac
 EOF
 chmod +x "$tmp/bin/git" "$tmp/bin/cargo" "$tmp/bin/gh"
 
+initial_log="$tmp/initial-commands.log"
+before_initial="$(sha256sum "$repo/skills/mise/mise-skills/Cargo.toml" "$repo/skills/mise/mise-skills/Cargo.lock")"
+initial_head="$(/usr/bin/git -C "$repo" rev-parse HEAD)"
+PATH="$tmp/bin:/usr/bin:/bin" \
+FAKE_LOG="$initial_log" \
+MISE_PROJECT_ROOT="$repo" \
+bash "$task" --version 0.1.0 --yes
+
+test "$before_initial" = "$(sha256sum "$repo/skills/mise/mise-skills/Cargo.toml" "$repo/skills/mise/mise-skills/Cargo.lock")"
+test "$initial_head" = "$(/usr/bin/git -C "$repo" rev-parse refs/tags/v0.1.0^{commit})"
+grep -F 'git tag -a v0.1.0 -m Release skills v0.1.0' "$initial_log"
+grep -F 'git push origin main' "$initial_log"
+grep -F 'git push origin v0.1.0' "$initial_log"
+test "$(grep -c '^git commit' "$initial_log" || true)" = 0
+test "$(grep -c '^cargo ' "$initial_log" || true)" = 0
+test "$(grep -c '^gh workflow run' "$initial_log")" = 1
+
+initial_repeat_output="$tmp/initial-repeat.out"
+if PATH="$tmp/bin:/usr/bin:/bin" \
+    FAKE_LOG="$tmp/initial-repeat.log" \
+    MISE_PROJECT_ROOT="$repo" \
+    bash "$task" --version 0.1.0 --yes >"$initial_repeat_output" 2>&1; then
+    cat "$initial_repeat_output"
+    exit 1
+fi
+grep -F 'release: tag v0.1.0 already exists locally or remotely' "$initial_repeat_output"
+
 log="$tmp/commands.log"
+: > "$log"
 PATH="$tmp/bin:/usr/bin:/bin" \
 FAKE_LOG="$log" \
 MISE_PROJECT_ROOT="$repo" \

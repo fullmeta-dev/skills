@@ -131,12 +131,22 @@ mise run release -- --version 1.4.0
 mise run release -- --minor --yes
 ```
 
+For the first release when Cargo already contains the desired version and no
+matching tag exists, use the exact-version form:
+
+```sh
+mise run release -- --version 0.1.0
+```
+
 `--version` normalizes an optional leading `v` and is mutually exclusive with
 the bump flags. Preflight checks the worktree, branch, `HEAD == origin/main`,
 Git/GitHub credentials, Cargo semver, and local/remote tag availability before
 writing. Without `--yes`, confirmation one creates the Cargo version/lockfile
 change, `Release skills vX.Y.Z` commit, annotated tag, and pushes `main` plus
-the tag. Confirmation two separately dispatches the external workflow.
+the tag. For an exact version equal to the current Cargo version, the initial
+untagged release instead tags and pushes the existing current commit without
+writing Cargo files or creating a no-op release commit. Confirmation two
+separately dispatches the external workflow.
 
 The workflow is `workflow_dispatch` only and must be dispatched at `vX.Y.Z`.
 It derives and verifies Cargo's version, builds only Linux x86_64

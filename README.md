@@ -127,11 +127,21 @@ mise run release -- --version 1.4.0
 mise run release -- --minor --yes
 ```
 
+For the first release when Cargo already contains the desired version and no
+matching tag exists, use the exact-version form:
+
+```sh
+mise run release -- --version 0.1.0
+```
+
 The task performs a read-only preflight (clean worktree, `main`,
 `HEAD == origin/main`, credentials, valid Cargo semver, and unused local and
-remote tag), prints the exact plan, and then has two confirmations. The first
-allows changing `Cargo.toml`/`Cargo.lock`, creating `Release skills vX.Y.Z`,
-creating the annotated `vX.Y.Z` tag, and pushing `main` plus the tag. The second
+remote tag), prints the exact plan, and then has two confirmations. A normal
+release changes `Cargo.toml`/`Cargo.lock`, creates `Release skills vX.Y.Z`,
+creates the annotated `vX.Y.Z` tag, and pushes `main` plus the tag. An exact
+version equal to the current Cargo version is allowed only for this initial
+untagged release: it tags and pushes the existing current commit without
+writing Cargo files or creating a no-op release commit. The second confirmation
 independently dispatches the external GitHub build. `--yes` accepts both
 confirmations; `--version` accepts an optional leading `v` and is exclusive
 with the bump flags.

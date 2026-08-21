@@ -53,7 +53,9 @@ manifest/API paths are injectable for no-network tests.
 `mise run release -- --patch|--minor|--major|--version VERSION` is the sole
 operator entrypoint. It requires a clean, current `main`, validates Cargo
 semver and tag availability before writing, then separately confirms the
-version commit/tag push and external workflow dispatch. `--yes` accepts both;
+version commit/tag push and external workflow dispatch. For the initial
+untagged release, an exact `--version` equal to Cargo's current version tags and
+pushes the existing commit without a no-op version commit. `--yes` accepts both;
 `--resume --version VERSION` verifies and dispatches an already pushed matching
 tag without changing Git. A failed dispatch retains the immutable tag.
 
