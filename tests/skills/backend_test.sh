@@ -3,7 +3,8 @@
 set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-PLUGIN_DIR="$(cd -- "$SCRIPT_DIR/../plugin" && pwd)"
+REPO_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
+PLUGIN_DIR="$REPO_ROOT/packages/skills-plugin"
 FIXTURE_DIR="$SCRIPT_DIR/fixtures/backend-source"
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/mise-skills-backend.XXXXXX")"
 trap 'rm -rf "$WORK_DIR"' EXIT

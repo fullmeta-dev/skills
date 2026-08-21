@@ -19,8 +19,8 @@ for target in "${targets[@]}"; do
             exit 1
             ;;
     esac
-    cargo build --release --manifest-path skills/mise/mise-skills/Cargo.toml --target "$target"
-    binary="skills/mise/mise-skills/target/$target/release/skills"
+    cargo build --release --manifest-path packages/skills/Cargo.toml --target "$target"
+    binary="packages/skills/target/$target/release/skills"
     [[ -x "$binary" || -f "$binary" ]] || {
         printf 'missing release binary: %s\n' "$binary" >&2
         exit 1

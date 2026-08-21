@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 fn fixture() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../tests/fixtures/discovery")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/discovery")
 }
 
 #[test]

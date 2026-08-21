@@ -38,7 +38,7 @@ jobs:
           esac
           cargo_version="$(python3 - <<'PY'
           import tomllib
-          with open('skills/mise/mise-skills/Cargo.toml', 'rb') as stream:
+          with open('packages/skills/Cargo.toml', 'rb') as stream:
               print(tomllib.load(stream)['package']['version'])
           PY
           )"
@@ -90,7 +90,7 @@ jobs:
           esac
           cargo_version="$(python3 - <<'PY'
           import tomllib
-          with open('skills/mise/mise-skills/Cargo.toml', 'rb') as stream:
+          with open('packages/skills/Cargo.toml', 'rb') as stream:
               print(tomllib.load(stream)['package']['version'])
           PY
           )"

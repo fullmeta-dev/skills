@@ -9,9 +9,9 @@ local function load_backend()
     if plugin_dir == nil then
         error("skills backend: pluginDirPath is unavailable")
     end
-    return dofile(file.join_path(plugin_dir, "lib", "skills_backend.lua"))
+    return dofile(file.join_path(plugin_dir, "packages", "skills-plugin", "lib", "skills_backend.lua"))
 end
 
-function PLUGIN:BackendListVersions(ctx)
-    return load_backend().list_versions(ctx)
+function PLUGIN:BackendInstall(ctx)
+    return load_backend().install(ctx)
 end

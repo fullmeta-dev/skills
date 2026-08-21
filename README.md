@@ -104,22 +104,23 @@ The concise reference is [`docs/mise-skills.md`](docs/mise-skills.md).
 
 ## Development
 
-The backend is under `skills/mise/plugin`; the Rust CLI is under
-`skills/mise/mise-skills`:
+The backend implementation is under `packages/skills-plugin`; the Rust CLI is under
+`packages/skills`:
 
 ```sh
-cargo test --manifest-path skills/mise/mise-skills/Cargo.toml
-skills/mise/mise-skills-tests/backend_test.sh
-skills/mise/mise-skills-tests/e2e.sh
+cargo test --manifest-path packages/skills/Cargo.toml
+tests/skills/backend_test.sh
+tests/skills/e2e.sh
 ```
 
 ## Maintainer releases
 
 Releases are deliberate, tag-ref based operations. Ordinary pushes and merges
-do not run the release workflow. From a clean, up-to-date `main` checkout, pick
-one version operation:
+do not run the release workflow. From a clean, up-to-date `main` checkout, run a bare command for the default
+patch bump or choose another version operation explicitly:
 
 ```sh
+mise run release
 mise run release -- --patch
 mise run release -- --minor
 mise run release -- --major
@@ -175,6 +176,6 @@ and [`.github/workflows/release.yml`](.github/workflows/release.yml). After a
 public release exists, the read-only integration check can verify the real API,
 manifest, archives, and checksums with
 `RUN_RELEASE_INTEGRATION=1 tests/release_assets_integration.sh`. A local
-developer uses `cargo run --manifest-path skills/mise/mise-skills/Cargo.toml`
+developer uses `cargo run --manifest-path packages/skills/Cargo.toml`
 or a separately published development artifact; no committed compatibility
 manifest is a release source.

@@ -3,10 +3,11 @@
 set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd -- "$SCRIPT_DIR/../../.." && pwd)"
-PLUGIN_SOURCE="$REPO_ROOT/skills/mise/plugin"
+REPO_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
+# Install the repository root so mise exercises the thin plugin entry-point shims.
+PLUGIN_SOURCE="$REPO_ROOT"
 MISE_BIN="${MISE_BIN:-$(command -v mise || true)}"
-CLI_BIN="${MISE_SKILLS_BIN:-$REPO_ROOT/skills/mise/mise-skills/target/debug/skills}"
+CLI_BIN="${MISE_SKILLS_BIN:-$REPO_ROOT/packages/skills/target/debug/skills}"
 [[ -x "$MISE_BIN" ]] || { printf 'mise is required\n' >&2; exit 2; }
 [[ -x "$CLI_BIN" ]] || { printf 'skills binary is required\n' >&2; exit 2; }
 
@@ -28,6 +29,9 @@ PROJECT_DIR="$WORK_DIR/project"
 mkdir -p "$PLUGIN_REPO" "$SOURCE_DIR/skills/demo" "$HOME_DIR" "$CONFIG_DIR" \
     "$DATA_DIR" "$STATE_DIR" "$CACHE_DIR" "$PROJECT_DIR"
 cp -a "$PLUGIN_SOURCE/." "$PLUGIN_REPO/"
+# The source checkout has its own Git metadata; the disposable plugin needs a
+# fresh repository containing only the shipped files.
+rm -rf "$PLUGIN_REPO/.git"
 git -C "$PLUGIN_REPO" init -q
 git -C "$PLUGIN_REPO" add .
 git -C "$PLUGIN_REPO" -c user.email=e2e@example.invalid -c user.name=e2e commit -qm plugin

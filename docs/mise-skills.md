@@ -123,7 +123,10 @@ desired links.
 The only release entrypoint is the executable mise file task. Run it from a
 clean, current `main`:
 
+A bare `mise run release` defaults to a patch bump. Explicit operations are:
+
 ```sh
+mise run release
 mise run release -- --patch
 mise run release -- --minor
 mise run release -- --major

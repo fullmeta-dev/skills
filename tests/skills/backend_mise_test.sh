@@ -3,7 +3,9 @@
 set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-PLUGIN_DIR="$(cd -- "$SCRIPT_DIR/../plugin" && pwd)"
+REPO_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
+# Install the repository root so mise exercises the thin plugin entry-point shims.
+PLUGIN_DIR="$REPO_ROOT"
 FIXTURE_DIR="$SCRIPT_DIR/fixtures/backend-source"
 MISE_BIN="${MISE_BIN:-mise}"
 
@@ -41,6 +43,8 @@ PROJECT_DIR="$WORK_DIR/project"
 mkdir -p "$PLUGIN_REPO" "$HOME_DIR" "$CONFIG_DIR" "$DATA_DIR" "$STATE_DIR" \
     "$CACHE_DIR" "$PROJECT_DIR" "$GITHUB_BASE/owner"
 cp -a "$PLUGIN_DIR/." "$PLUGIN_REPO/"
+# Avoid reusing the worktree's Git file when copying the repository root.
+rm -rf "$PLUGIN_REPO/.git"
 git -C "$PLUGIN_REPO" init -q
 git -C "$PLUGIN_REPO" add .
 git -C "$PLUGIN_REPO" -c user.email=compat@example.invalid \

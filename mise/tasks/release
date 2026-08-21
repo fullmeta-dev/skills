@@ -69,8 +69,9 @@ if [[ -n "$requested_version" && $bump_count -gt 0 ]]; then
     exit 2
 fi
 if [[ -z "$requested_version" && $bump_count -eq 0 && "$resume" != "true" ]]; then
-    echo "release: choose exactly one of --patch, --minor, --major, or --version VERSION" >&2
-    exit 2
+    # A bare release invocation is the conservative patch release operation.
+    patch=true
+    bump_count=1
 fi
 if [[ "$resume" == "true" && $bump_count -gt 0 ]]; then
     echo "release: --resume cannot be combined with a semantic bump" >&2
@@ -78,8 +79,8 @@ if [[ "$resume" == "true" && $bump_count -gt 0 ]]; then
 fi
 
 repo_root="${MISE_PROJECT_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
-cargo_manifest="$repo_root/skills/mise/mise-skills/Cargo.toml"
-cargo_lock="$repo_root/skills/mise/mise-skills/Cargo.lock"
+cargo_manifest="$repo_root/packages/skills/Cargo.toml"
+cargo_lock="$repo_root/packages/skills/Cargo.lock"
 cd "$repo_root"
 
 require_command() {
@@ -317,8 +318,8 @@ PY
         cargo check --manifest-path "$cargo_manifest"
         cargo test --manifest-path "$cargo_manifest" --locked
         changed_files="$(git diff --name-only)"
-        expected_files=$'skills/mise/mise-skills/Cargo.lock\nskills/mise/mise-skills/Cargo.toml'
-        if [[ "$changed_files" != "$expected_files" && "$changed_files" != $'skills/mise/mise-skills/Cargo.toml\nskills/mise/mise-skills/Cargo.lock' ]]; then
+        expected_files=$'packages/skills/Cargo.lock\npackages/skills/Cargo.toml'
+        if [[ "$changed_files" != "$expected_files" && "$changed_files" != $'packages/skills/Cargo.toml\npackages/skills/Cargo.lock' ]]; then
             echo "release: version preparation changed unexpected files:" >&2
             printf '%s\n' "$changed_files" >&2
             exit 1

@@ -350,17 +350,24 @@ V1 behavior:
 ### Repository layout
 
 ```text
-skills/
-  mise/plugin/
+packages/
+  skills-plugin/
     metadata.lua
     hooks/backend_list_versions.lua
     hooks/backend_install.lua
-  mise/mise-skills/
+    lib/skills_backend.lua
+  skills/
     Cargo.toml
     src/
-  mise/mise-skills-tests/
-  docs/mise-skills.md
-  tests/fixtures/
+    tests/
+tests/
+  skills/
+    backend_test.sh
+    backend_mise_test.sh
+    e2e.sh
+  fixtures/
+skills/
+  mise/SKILL.md
 ```
 
 The plugin is Lua because that is mise's documented backend-plugin interface.
