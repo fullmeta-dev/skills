@@ -7,7 +7,8 @@ mise and materializes selected skills for supported agents.
 ## Quick start
 
 Prerequisites: [mise](https://mise.jdx.dev/) 2026.6.14 or newer, Git, and a
-supported agent. Install the backend plugin and the released CLI as ordinary
+supported agent. Release assets currently support Linux x86_64 and macOS
+arm64 only. Install the backend plugin and the released CLI as ordinary
 mise tools (no wrapper task is required):
 
 ```sh

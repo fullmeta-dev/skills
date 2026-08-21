@@ -7,7 +7,7 @@ out_dir_input="${2:?usage: package-release.sh VERSION OUTPUT_DIR [TARGET...] }"
 shift 2
 targets=("$@")
 if ((${#targets[@]} == 0)); then
-    targets=(x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-apple-darwin aarch64-apple-darwin x86_64-pc-windows-msvc)
+    targets=(x86_64-unknown-linux-gnu aarch64-apple-darwin)
 fi
 mkdir -p "$out_dir_input"
 out_dir="$(cd -- "$out_dir_input" && pwd)"
