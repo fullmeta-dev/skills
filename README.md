@@ -17,7 +17,7 @@ copy-pasteable bootstrap. The script writes the checked-in config artifact
 and runs real `mise bootstrap`:
 
 ```sh
-curl --fail --location https://raw.githubusercontent.com/fullmeta-dev/skills/fb2eecb5da7e6670e4cf018ec7b3c5e9de7a24d7/skills/mise/bootstrap.sh | bash
+curl --fail --location https://raw.githubusercontent.com/fullmeta-dev/skills/348a5b2021d1e8b6d398c1da068fee90bb1c3653/skills/mise/bootstrap.sh | bash
 ```
 
 For an offline or reviewed setup, copy [`docs/mise-skills-bootstrap.toml`](docs/mise-skills-bootstrap.toml)

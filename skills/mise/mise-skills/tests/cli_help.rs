@@ -106,7 +106,7 @@ fn bootstrap_artifact_declares_the_complete_global_flow() {
     for required in [
         "[plugins]",
         "vfox-backend:skills",
-        "#fb2eecb5da7e6670e4cf018ec7b3c5e9de7a24d7",
+        "#348a5b2021d1e8b6d398c1da068fee90bb1c3653",
         "[tools.\"github:fullmeta-dev/skills\"]",
         "bin = \"mise-skills\"",
         "[tasks.skills]",

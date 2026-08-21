@@ -2,7 +2,7 @@
 # Install the pinned mise-skills global config and bootstrap it with mise.
 set -Eeuo pipefail
 
-REPOSITORY="https://raw.githubusercontent.com/fullmeta-dev/skills/fb2eecb5da7e6670e4cf018ec7b3c5e9de7a24d7"
+REPOSITORY="https://raw.githubusercontent.com/fullmeta-dev/skills/348a5b2021d1e8b6d398c1da068fee90bb1c3653"
 CONFIG_DIR="${MISE_CONFIG_DIR:-${XDG_CONFIG_HOME:-${HOME:?}/.config}/mise}"
 mkdir -p "$CONFIG_DIR"
 curl --fail --location --silent --show-error \

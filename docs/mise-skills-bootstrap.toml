@@ -6,7 +6,7 @@
 experimental = true
 
 [plugins]
-"vfox-backend:skills" = "https://github.com/fullmeta-dev/skills.git#fb2eecb5da7e6670e4cf018ec7b3c5e9de7a24d7"
+"vfox-backend:skills" = "https://github.com/fullmeta-dev/skills.git#348a5b2021d1e8b6d398c1da068fee90bb1c3653"
 
 [tools."github:fullmeta-dev/skills"]
 version = "0.1.0"
@@ -23,4 +23,4 @@ run = "mise-skills ${usage_arguments-}"
 raw = true
 
 [bootstrap.hooks.pre-tools]
-run = "bash ${MISE_CONFIG_DIR:-$HOME/.config/mise}/mise-skills-bootstrap-plugin.sh skills https://github.com/fullmeta-dev/skills.git fb2eecb5da7e6670e4cf018ec7b3c5e9de7a24d7"
+run = "bash ${MISE_CONFIG_DIR:-$HOME/.config/mise}/mise-skills-bootstrap-plugin.sh skills https://github.com/fullmeta-dev/skills.git 348a5b2021d1e8b6d398c1da068fee90bb1c3653"
