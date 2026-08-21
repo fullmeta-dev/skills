@@ -1,5 +1,6 @@
 use crate::source::{SourceKind, SourceSpec};
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use toml_edit::{value, Array, DocumentMut, Item, Table, Value};
 
@@ -168,11 +169,81 @@ impl Config {
         let temporary = self.path.with_extension("toml.skills-tmp");
         fs::write(&temporary, after)
             .map_err(|error| format!("cannot write {}: {error}", temporary.display()))?;
-        if let Err(error) = fs::rename(&temporary, &self.path) {
+        if let Err(error) = replace_file(&temporary, &self.path) {
             let _ = fs::remove_file(&temporary);
             return Err(format!("cannot replace {}: {error}", self.path.display()));
         }
         Ok(true)
+    }
+}
+
+fn replace_file(temporary: &Path, destination: &Path) -> io::Result<()> {
+    #[cfg(not(windows))]
+    {
+        fs::rename(temporary, destination)
+    }
+    #[cfg(windows)]
+    {
+        replace_file_windows(temporary, destination)
+    }
+}
+
+#[cfg(windows)]
+fn replace_file_windows(temporary: &Path, destination: &Path) -> io::Result<()> {
+    use std::ffi::c_void;
+    use std::os::windows::ffi::OsStrExt;
+    use std::ptr;
+
+    const ERROR_FILE_NOT_FOUND: i32 = 2;
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        #[link_name = "ReplaceFileW"]
+        fn replace_file_w(
+            replaced_file_name: *const u16,
+            replacement_file_name: *const u16,
+            backup_file_name: *const u16,
+            replace_flags: u32,
+            exclude: *mut c_void,
+            reserved: *mut c_void,
+        ) -> i32;
+    }
+
+    let destination_path = destination;
+    let temporary_path = temporary;
+    let destination: Vec<u16> = destination_path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let temporary: Vec<u16> = temporary_path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    // ReplaceFileW is atomic for an existing destination. A new config has no
+    // destination for ReplaceFileW to replace, so retain rename semantics for
+    // that one case; both paths are in the same directory.
+    // SAFETY: all pointers reference NUL-terminated UTF-16 buffers or null
+    // optional arguments, and the buffers remain alive for the call.
+    let result = unsafe {
+        replace_file_w(
+            destination.as_ptr(),
+            temporary.as_ptr(),
+            ptr::null(),
+            0,
+            ptr::null_mut(),
+            ptr::null_mut(),
+        )
+    };
+    if result != 0 {
+        return Ok(());
+    }
+    let error = io::Error::last_os_error();
+    if error.raw_os_error() == Some(ERROR_FILE_NOT_FOUND) {
+        fs::rename(temporary_path, destination_path)
+    } else {
+        Err(error)
     }
 }
 
@@ -568,6 +639,23 @@ mod tests {
 
     fn doc(input: &str) -> DocumentMut {
         input.parse().unwrap()
+    }
+
+    #[test]
+    fn save_if_changed_replaces_an_existing_config() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("mise.toml");
+        std::fs::write(&path, "[tools]\npython = \"3\"\n").unwrap();
+        let mut config = Config::load_path(&path).unwrap();
+        let before = config.document.to_string();
+        config.document["tools"]["node"] = value("22");
+
+        assert!(config.save_if_changed(&before).unwrap());
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "[tools]\npython = \"3\"\nnode = \"22\"\n"
+        );
+        assert!(!path.with_extension("toml.skills-tmp").exists());
     }
 
     #[test]

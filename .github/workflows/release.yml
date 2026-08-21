@@ -62,6 +62,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          cargo test --release --manifest-path skills/mise/mise-skills/Cargo.toml --target '${{ matrix.target }}' --bin skills save_if_changed_replaces_an_existing_config
           cargo build --release --manifest-path skills/mise/mise-skills/Cargo.toml --target '${{ matrix.target }}'
           $binary = "skills/mise/mise-skills/target/${{ matrix.target }}/release/skills.exe"
           if (-not (Test-Path -Path $binary -PathType Leaf)) { throw "missing release binary: $binary" }
