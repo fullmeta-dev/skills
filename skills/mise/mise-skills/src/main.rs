@@ -263,7 +263,8 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     let Some(command) = cli.command else {
         // Clap's generated help is intentionally the only output for a bare
-        // invocation; this keeps `mise run skills --help` side-effect free.
+        // invocation; task `--help` is also side-effect free, while CLI help
+        // is invoked as `mise run skills -- --help` when task usage is present.
         let mut command = Cli::command();
         if let Err(error) = command.print_help() {
             eprintln!("{error}");

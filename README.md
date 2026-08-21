@@ -57,7 +57,7 @@ mise run skills -- prune
 Help and shell completion are side-effect free:
 
 ```sh
-mise run skills --help
+mise run skills -- --help
 mise run skills -- completions bash > ~/.local/share/bash-completion/completions/mise-skills
 mise run skills -- completions zsh > ~/.zfunc/_mise-skills
 mise run skills -- completions fish > ~/.config/fish/completions/mise-skills.fish

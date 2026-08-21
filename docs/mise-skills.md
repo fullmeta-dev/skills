@@ -29,9 +29,10 @@ raw = true
 ```
 
 Use `mise run skills -- ...` in scripts and hooks. `mise skills ...` is an
-interactive shorthand only. Bare invocation and `--help` delegate to the CLI
-without editing config, resolving sources, installing tools, or creating
-links.
+interactive shorthand only. Bare invocation delegates to the CLI without
+editing config, resolving sources, installing tools, or creating links. With
+task `usage` metadata, mise reserves `mise run skills --help` for its own
+side-effect-free task help; use `mise run skills -- --help` for CLI help.
 
 Commands default to the nearest project `mise.toml`:
 
