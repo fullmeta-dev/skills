@@ -107,10 +107,13 @@ local_digest="$(sed -nE 's/.*found ([0-9a-f]{64}).*/\1/p' <<< "$local_error" | h
 [[ "$local_digest" =~ ^[0-9a-f]{64}$ ]]
 local_version="tree-$local_digest"
 run_backend install local/local-source "path:../local-source" "$local_version" "$WORK_DIR/local-install" "$config_root" skills >/dev/null
-[[ -f "$WORK_DIR/local-install/demo/SKILL.md" ]]
-[[ -x "$WORK_DIR/local-install/demo/scripts/run.sh" ]]
+[[ -f "$WORK_DIR/local-install/skills/demo/SKILL.md" ]]
+[[ -x "$WORK_DIR/local-install/skills/demo/scripts/run.sh" ]]
+# The backend artifact is the complete source snapshot; selection is applied
+# later by the lifecycle CLI.
+grep -Fq '"subpath":"."' "$WORK_DIR/local-install/.mise-skills-manifest.json"
+grep -Fq 'skills/demo' "$WORK_DIR/local-install/.mise-skills-manifest.json"
 ! grep -Fq 'track' "$WORK_DIR/local-install/.mise-skills-manifest.json"
-! grep -Fq 'source_subpath' "$WORK_DIR/local-install/.mise-skills-manifest.json"
 touch "$source_root/skills/demo/SKILL.md"
 run_backend install local/local-source "path:../local-source" "$local_version" "$WORK_DIR/local-mtime" "$config_root" skills >/dev/null
 mkdir -p "$source_root/skills/.git"
@@ -158,8 +161,14 @@ grep -Fq "$revision" <<< "$list_output"
 
 mkdir -p "$WORK_DIR/git-home" "$WORK_DIR/git-cache"
 MISE_CACHE_DIR="$WORK_DIR/git-cache" run_backend install local/git-source "git:file://$git_source" "rev:$revision" "$WORK_DIR/git-install" "$config_root" skills >/dev/null
-[[ -f "$WORK_DIR/git-install/demo/SKILL.md" ]]
+[[ -f "$WORK_DIR/git-install/skills/demo/SKILL.md" ]]
+grep -Fq '"subpath":"."' "$WORK_DIR/git-install/.mise-skills-manifest.json"
 grep -Fq "rev:$revision" "$WORK_DIR/git-install/.mise-skills-manifest.json"
+# The same source revision can be installed for a different declaration
+# subpath without changing the artifact contents or manifest identity.
+MISE_CACHE_DIR="$WORK_DIR/git-cache" run_backend install local/git-source "git:file://$git_source" "rev:$revision" "$WORK_DIR/git-root-install" "$config_root" "" >/dev/null
+[[ -f "$WORK_DIR/git-root-install/skills/demo/SKILL.md" ]]
+cmp "$WORK_DIR/git-install/skills/demo/SKILL.md" "$WORK_DIR/git-root-install/skills/demo/SKILL.md"
 # Native mise ls-remote cannot emit the custom rev: prefix. Its raw commit
 # output must still be accepted by install and normalized in the manifest.
 MISE_CACHE_DIR="$WORK_DIR/git-cache" run_backend install local/git-source "git:file://$git_source" "$revision" "$WORK_DIR/git-raw-version" "$config_root" skills >/dev/null
@@ -169,11 +178,11 @@ mkdir -p "$WORK_DIR/github-base/owner"
 git clone -q --bare "$git_source" "$WORK_DIR/github-base/owner/repo.git"
 MISE_CACHE_DIR="$WORK_DIR/github-cache" MISE_SKILLS_GITHUB_BASE_URL="file://$WORK_DIR/github-base" \
     run_backend install owner/repo "github:owner/repo" "rev:$revision" "$WORK_DIR/github-install" "$config_root" skills >/dev/null
-[[ -f "$WORK_DIR/github-install/demo/SKILL.md" ]]
+[[ -f "$WORK_DIR/github-install/skills/demo/SKILL.md" ]]
 rm -rf "$WORK_DIR/github-base"
 MISE_CACHE_DIR="$WORK_DIR/github-cache" MISE_SKILLS_GITHUB_BASE_URL="file://$WORK_DIR/github-base" \
     run_backend install owner/repo "github:owner/repo" "rev:$revision" "$WORK_DIR/github-cached" "$config_root" skills >/dev/null
-[[ -f "$WORK_DIR/github-cached/demo/SKILL.md" ]]
+[[ -f "$WORK_DIR/github-cached/skills/demo/SKILL.md" ]]
 
 printf 'generic Git and GitHub exact-commit cache/fetch: passed\n'
 

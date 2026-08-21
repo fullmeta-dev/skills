@@ -9,8 +9,9 @@ use serde::Serialize;
 use source::{
     canonical_version, local_pin, resolve_git_pin, validate_subpath, SourceKind, SourceSpec,
 };
+use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
+use std::process::{Command as ProcessCommand, ExitCode};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -476,13 +477,107 @@ fn remove_command(args: RemoveArgs) -> Result<(bool, PathBuf), String> {
     } else {
         format!("skills:{}", args.tool)
     };
+    let removed_tool = config::tool_info(&config.document, &key)?
+        .ok_or_else(|| format!("skill tool {key:?} is not declared"))?;
     config::remove_tool(&mut config.document, &key, &args.selectors)?;
+    let tool_still_declared = config::tool_info(&config.document, &key)?.is_some();
+    let remaining_reference = has_remaining_artifact_reference(&config, &removed_tool)?;
     config.save_if_changed(&before)?;
     let report = lifecycle::sync(&config, args.scope.is_global())?;
     for conflict in report.conflicts {
         eprintln!("warning: {conflict}");
     }
+
+    // Partial selector removal leaves the declaration (and therefore its
+    // artifact) in use. Even after removing the whole table, keep the normal
+    // mise artifact whenever another declaration in this config identifies
+    // the same source+version.
+    if !tool_still_declared && !remaining_reference {
+        uninstall_artifact(&removed_tool)?;
+    }
     Ok((before != config.document.to_string(), config.path))
+}
+
+fn has_remaining_artifact_reference(
+    config: &Config,
+    removed: &config::ToolInfo,
+) -> Result<bool, String> {
+    let removed_source =
+        SourceSpec::from_declared(&removed.source, &config.root, Some(&removed.key))?;
+    let removed_version = canonical_version(&removed.version, removed_source.kind)?;
+    if document_references_artifact(
+        &config.root,
+        &config.document,
+        &removed_source,
+        &removed_version,
+        Some(&removed.key),
+    )? {
+        return Ok(true);
+    }
+
+    // A global and a project declaration can share one mise installation even
+    // though each has its own lifecycle manifest. Inspect the normal scopes
+    // that can be active from this invocation before delegating removal; do
+    // not attempt a repository-wide configuration or garbage-collection scan.
+    for scope in [Scope::Global, Scope::Project] {
+        let path = scope.config_path()?;
+        if same_config_path(&path, &config.path) || !path.is_file() {
+            continue;
+        }
+        let other = Config::load_path(&path)?;
+        if document_references_artifact(
+            &other.root,
+            &other.document,
+            &removed_source,
+            &removed_version,
+            None,
+        )? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn document_references_artifact(
+    root: &Path,
+    document: &toml_edit::DocumentMut,
+    removed_source: &SourceSpec,
+    removed_version: &str,
+    removed_key: Option<&str>,
+) -> Result<bool, String> {
+    for tool in config::skill_tools(document)? {
+        if removed_key.is_some_and(|key| key == tool.key) {
+            continue;
+        }
+        let source = SourceSpec::from_declared(&tool.source, root, Some(&tool.key))?;
+        let version = canonical_version(&tool.version, source.kind)?;
+        if source.canonical == removed_source.canonical && version == removed_version {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn same_config_path(left: &Path, right: &Path) -> bool {
+    fs::canonicalize(left).ok() == fs::canonicalize(right).ok() || left == right
+}
+
+fn uninstall_artifact(tool: &config::ToolInfo) -> Result<(), String> {
+    let mise = std::env::var_os("MISE_BIN").unwrap_or_else(|| "mise".into());
+    let selector = format!("{}@{}", tool.key, tool.version);
+    let output = ProcessCommand::new(&mise)
+        .args(["uninstall", "--yes", "--quiet", &selector])
+        .output()
+        .map_err(|error| format!("cannot run normal mise artifact removal: {error}"))?;
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if detail.is_empty() {
+            format!("normal mise artifact removal failed for {selector}")
+        } else {
+            format!("normal mise artifact removal failed for {selector}: {detail}")
+        });
+    }
+    Ok(())
 }
 
 fn run_prune(args: PruneArgs) -> ExitCode {

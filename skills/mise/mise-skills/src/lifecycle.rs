@@ -1,11 +1,12 @@
 use crate::config::{Config, ToolInfo};
-use crate::source::{canonical_version, local_pin, SourceKind, SourceSpec};
+use crate::source::{canonical_version, local_pin, validate_subpath, SourceKind, SourceSpec};
 use mise_skills::discover_with_subpath;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
+use walkdir::WalkDir;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct OwnedLink {
@@ -80,7 +81,6 @@ struct DesiredLink {
 #[derive(Debug, Clone)]
 struct Artifact {
     path: PathBuf,
-    has_manifest: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -384,6 +384,7 @@ fn desired_tool_links(
             ));
         }
     }
+    let subpath = validate_subpath(Some(&tool.subpath))?;
     let artifact = find_artifact(&tool.key, &version)?.ok_or_else(|| {
         format!(
             "missing installed artifact for {}; run mise install",
@@ -391,9 +392,11 @@ fn desired_tool_links(
         )
     })?;
     verify_artifact(&artifact.path, &version, &source)?;
-    let subpath =
-        (!artifact.has_manifest && !tool.subpath.is_empty()).then(|| Path::new(&tool.subpath));
-    let discovery = discover_with_subpath(&artifact.path, subpath)
+    // Artifacts are complete source snapshots. Apply each declaration's safe
+    // source_subpath only while selecting skills, never while locating or
+    // materializing the shared source+version artifact.
+    let selection_root = (!subpath.is_empty()).then(|| Path::new(subpath.as_str()));
+    let discovery = discover_with_subpath(&artifact.path, selection_root)
         .map_err(|error| format!("cannot discover {}: {error}", tool.key))?;
     if discovery.has_errors() {
         return Err(format!(
@@ -639,6 +642,9 @@ fn absolute_path(path: &Path) -> Result<PathBuf, String> {
 fn verify_artifact(path: &Path, version: &str, source: &SourceSpec) -> Result<(), String> {
     let manifest_path = path.join(".mise-skills-manifest.json");
     if !manifest_path.is_file() {
+        // Manifests were added after tree- pins shipped. Keep accepting a
+        // manifest-less legacy artifact, but never infer a source subpath from
+        // its layout: callers always apply the declaration subpath below.
         return Ok(());
     }
     let contents = fs::read_to_string(&manifest_path).map_err(|error| {
@@ -653,10 +659,51 @@ fn verify_artifact(path: &Path, version: &str, source: &SourceSpec) -> Result<()
             manifest_path.display()
         )
     })?;
+    let schema = manifest
+        .get("schema_version")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| {
+            format!(
+                "artifact manifest has no schema_version: {}",
+                manifest_path.display()
+            )
+        })?;
+    if schema != 1 {
+        return Err(format!(
+            "unsupported artifact manifest schema {schema}: {}",
+            manifest_path.display()
+        ));
+    }
+
+    let actual_source = manifest
+        .get("source")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            format!(
+                "artifact manifest has no source: {}",
+                manifest_path.display()
+            )
+        })?;
+    let source_matches = match source.kind {
+        SourceKind::Path => {
+            let actual_path = actual_source.strip_prefix("path:").unwrap_or(actual_source);
+            fs::canonicalize(actual_path)
+                .ok()
+                .zip(source.resolved_path.as_ref())
+                .is_some_and(|(actual, expected)| actual == *expected)
+        }
+        SourceKind::Github | SourceKind::Git => actual_source == source.canonical,
+    };
+    if !source_matches {
+        return Err(format!(
+            "installed artifact source mismatch: declared {} but found {}",
+            source.canonical, actual_source
+        ));
+    }
+
     let actual = manifest
         .get("version")
         .and_then(serde_json::Value::as_str)
-        .or_else(|| manifest.get("revision").and_then(serde_json::Value::as_str))
         .ok_or_else(|| {
             format!(
                 "artifact manifest has no version: {}",
@@ -669,25 +716,183 @@ fn verify_artifact(path: &Path, version: &str, source: &SourceSpec) -> Result<()
             "installed artifact version mismatch: declared {version} but found {actual_version}"
         ));
     }
-    if let Some(actual_source) = manifest.get("source").and_then(serde_json::Value::as_str) {
-        let source_matches = match source.kind {
-            SourceKind::Path => {
-                let actual_path = actual_source.strip_prefix("path:").unwrap_or(actual_source);
-                fs::canonicalize(actual_path)
-                    .ok()
-                    .zip(source.resolved_path.as_ref())
-                    .is_some_and(|(actual, expected)| actual == *expected)
-            }
-            SourceKind::Github | SourceKind::Git => actual_source == source.canonical,
-        };
-        if !source_matches {
+    if let Some(revision) = manifest.get("revision").and_then(serde_json::Value::as_str) {
+        let revision = canonical_version(revision, source.kind)?;
+        if revision != actual_version {
             return Err(format!(
-                "installed artifact source mismatch: declared {} but found {}",
-                source.canonical, actual_source
+                "installed artifact revision mismatch: version is {actual_version} but revision is {revision}"
             ));
         }
     }
+
+    // A full snapshot is rooted at the artifact itself. A manifest that
+    // records a non-empty subpath is an older partial artifact and must not be
+    // selected, because reusing it for another declaration could activate a
+    // different source tree at the same source+version key.
+    let artifact_subpath = manifest
+        .get("subpath")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            format!(
+                "artifact manifest has no subpath: {}",
+                manifest_path.display()
+            )
+        })?;
+    if !validate_subpath(Some(artifact_subpath))?.is_empty() {
+        return Err(format!(
+            "artifact manifest is not a complete source snapshot: subpath {artifact_subpath:?}"
+        ));
+    }
+    let actual_tree = manifest
+        .get("tree")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            format!(
+                "artifact manifest has no snapshot tree: {}",
+                manifest_path.display()
+            )
+        })?;
+    if actual_tree.len() != 64
+        || !actual_tree
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+    {
+        return Err(format!(
+            "artifact manifest has invalid snapshot tree: {}",
+            manifest_path.display()
+        ));
+    }
+    let expected_tree = crate::source::tree_digest(path)?;
+    if actual_tree.to_ascii_lowercase() != expected_tree {
+        return Err(format!(
+            "artifact snapshot tree mismatch: declared {actual_tree} but found {expected_tree}"
+        ));
+    }
+
+    let inventory = manifest
+        .get("skills")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| {
+            format!(
+                "artifact manifest has no skills inventory: {}",
+                manifest_path.display()
+            )
+        })?;
+    let mut declared = BTreeMap::new();
+    for entry in inventory {
+        let object = entry.as_object().ok_or_else(|| {
+            format!(
+                "artifact skills inventory contains a non-object: {}",
+                manifest_path.display()
+            )
+        })?;
+        let raw_path = object
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| {
+                format!(
+                    "artifact skills inventory entry has no path: {}",
+                    manifest_path.display()
+                )
+            })?;
+        let path_value = validate_inventory_path(raw_path)?;
+        let tree = object
+            .get("tree")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| format!("artifact skills inventory entry has no tree: {raw_path}"))?;
+        if tree.len() != 64 || !tree.chars().all(|character| character.is_ascii_hexdigit()) {
+            return Err(format!(
+                "artifact skills inventory has invalid tree for {raw_path}"
+            ));
+        }
+        if declared
+            .insert(path_value.clone(), tree.to_ascii_lowercase())
+            .is_some()
+        {
+            return Err(format!(
+                "artifact skills inventory repeats path {raw_path:?}"
+            ));
+        }
+        let skill_root = if path_value == "." {
+            path.to_path_buf()
+        } else {
+            path.join(&path_value)
+        };
+        if !skill_root.is_dir() || !skill_root.join("SKILL.md").is_file() {
+            return Err(format!(
+                "artifact skills inventory path is missing: {raw_path}"
+            ));
+        }
+        let actual_tree = crate::source::tree_digest(&skill_root)?;
+        if actual_tree != tree.to_ascii_lowercase() {
+            return Err(format!(
+                "artifact skills inventory tree mismatch for {raw_path}"
+            ));
+        }
+    }
+
+    let actual_paths = artifact_skill_paths(path)?;
+    let declared_paths = declared.keys().cloned().collect::<BTreeSet<_>>();
+    if actual_paths != declared_paths {
+        return Err(format!(
+            "artifact skills inventory does not match snapshot (declared {:?}, found {:?})",
+            declared_paths, actual_paths
+        ));
+    }
     Ok(())
+}
+
+fn validate_inventory_path(path: &str) -> Result<String, String> {
+    if path == "." {
+        return Ok(path.to_string());
+    }
+    let normalized = validate_subpath(Some(path))?;
+    if normalized.is_empty() {
+        return Err("artifact skills inventory path must name a skill directory".into());
+    }
+    Ok(normalized)
+}
+
+fn artifact_skill_paths(path: &Path) -> Result<BTreeSet<String>, String> {
+    let mut paths = BTreeSet::new();
+    let walker = WalkDir::new(path)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|entry| {
+            entry.depth() == 0
+                || !matches!(
+                    entry.file_name().to_str(),
+                    Some(".git")
+                        | Some("node_modules")
+                        | Some("dist")
+                        | Some("build")
+                        | Some("__pycache__")
+                        | Some(".mise-skills-manifest.json")
+                        | Some(".skills-backend")
+                )
+        });
+    for entry in walker {
+        let entry = entry.map_err(|error| format!("cannot inspect artifact inventory: {error}"))?;
+        if entry.file_name() != "SKILL.md" {
+            continue;
+        }
+        let parent = entry
+            .path()
+            .parent()
+            .ok_or_else(|| "artifact inventory has a SKILL.md without a parent".to_string())?;
+        let relative = parent
+            .strip_prefix(path)
+            .map_err(|error| error.to_string())?;
+        let relative = if relative.as_os_str().is_empty() {
+            ".".to_string()
+        } else {
+            relative
+                .to_string_lossy()
+                .replace(std::path::MAIN_SEPARATOR, "/")
+        };
+        paths.insert(relative);
+    }
+    Ok(paths)
 }
 
 fn find_artifact(key: &str, version: &str) -> Result<Option<Artifact>, String> {
@@ -723,44 +928,13 @@ fn find_artifact(key: &str, version: &str) -> Result<Option<Artifact>, String> {
     for candidate in candidates {
         if candidate.is_dir() {
             return Ok(Some(Artifact {
-                has_manifest: candidate.join(".mise-skills-manifest.json").is_file(),
                 path: fs::canonicalize(candidate).map_err(|error| error.to_string())?,
             }));
         }
     }
-    let tool_root = installs.join(&tool_name);
-    if tool_root.is_dir() {
-        for entry in fs::read_dir(&tool_root).map_err(|error| {
-            format!("cannot read mise installs {}: {error}", tool_root.display())
-        })? {
-            let entry = entry.map_err(|error| error.to_string())?;
-            let path = entry.path();
-            if !path.is_dir()
-                || !path.join("SKILL.md").is_file()
-                    && !path.join(".mise-skills-manifest.json").is_file()
-            {
-                continue;
-            }
-            if path.join(".mise-skills-manifest.json").is_file() {
-                let contents = fs::read_to_string(path.join(".mise-skills-manifest.json"))
-                    .map_err(|error| error.to_string())?;
-                let manifest: serde_json::Value =
-                    serde_json::from_str(&contents).map_err(|error| error.to_string())?;
-                let actual = manifest
-                    .get("version")
-                    .and_then(serde_json::Value::as_str)
-                    .or_else(|| manifest.get("revision").and_then(serde_json::Value::as_str));
-                if actual.is_some_and(|value| {
-                    value == version || value == version.strip_prefix("rev:").unwrap_or(version)
-                }) {
-                    return Ok(Some(Artifact {
-                        path: fs::canonicalize(&path).map_err(|error| error.to_string())?,
-                        has_manifest: true,
-                    }));
-                }
-            }
-        }
-    }
+    // Do not fall back to scanning another version directory. The install
+    // path is the source+version identity; selecting an artifact by version
+    // alone can activate a different source when revisions happen to match.
     Ok(None)
 }
 
@@ -835,4 +1009,82 @@ fn save_manifest(config_root: &Path, manifest: &OwnershipManifest) -> Result<(),
             path.display()
         )
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use tempfile::TempDir;
+
+    fn manifest_fixture() -> (TempDir, PathBuf, SourceSpec, String, String) {
+        let temp = TempDir::new().unwrap();
+        let source_root = temp.path().join("source");
+        let artifact = temp.path().join("artifact");
+        fs::create_dir_all(source_root.join("skills/demo")).unwrap();
+        fs::create_dir_all(artifact.join("skills/demo")).unwrap();
+        let skill = "---\nname: demo\ndescription: demo\n---\n";
+        fs::write(source_root.join("skills/demo/SKILL.md"), skill).unwrap();
+        fs::write(artifact.join("skills/demo/SKILL.md"), skill).unwrap();
+        fs::write(source_root.join("skills/demo/extra.txt"), "extra").unwrap();
+        fs::write(artifact.join("skills/demo/extra.txt"), "extra").unwrap();
+        let source =
+            SourceSpec::parse(&format!("path:{}", source_root.display()), temp.path()).unwrap();
+        let version = local_pin(&source, "").unwrap();
+        let tree = crate::source::tree_digest(&artifact.join("skills/demo")).unwrap();
+        (temp, artifact, source, version, tree)
+    }
+
+    #[test]
+    fn verifies_complete_manifest_source_version_and_inventory() {
+        let (_temp, artifact, source, version, tree) = manifest_fixture();
+        let manifest = json!({
+            "schema_version": 1,
+            "source": format!("path:{}", source.resolved_path.as_ref().unwrap().display()),
+            "subpath": ".",
+            "version": version,
+            "revision": version,
+            "tree": crate::source::tree_digest(&artifact).unwrap(),
+            "skills": [{"path": "skills/demo", "tree": tree}],
+        });
+        fs::write(
+            artifact.join(".mise-skills-manifest.json"),
+            serde_json::to_string(&manifest).unwrap(),
+        )
+        .unwrap();
+        verify_artifact(&artifact, &version, &source).unwrap();
+    }
+
+    #[test]
+    fn rejects_partial_manifest_snapshot_and_inventory_mismatch() {
+        let (_temp, artifact, source, version, tree) = manifest_fixture();
+        let mut manifest = json!({
+            "schema_version": 1,
+            "source": format!("path:{}", source.resolved_path.as_ref().unwrap().display()),
+            "subpath": "skills",
+            "version": version,
+            "revision": version,
+            "tree": crate::source::tree_digest(&artifact).unwrap(),
+            "skills": [{"path": "skills/demo", "tree": tree}],
+        });
+        fs::write(
+            artifact.join(".mise-skills-manifest.json"),
+            serde_json::to_string(&manifest).unwrap(),
+        )
+        .unwrap();
+        assert!(verify_artifact(&artifact, &version, &source)
+            .unwrap_err()
+            .contains("complete source snapshot"));
+
+        manifest["subpath"] = json!(".");
+        manifest["skills"][0]["path"] = json!("missing");
+        fs::write(
+            artifact.join(".mise-skills-manifest.json"),
+            serde_json::to_string(&manifest).unwrap(),
+        )
+        .unwrap();
+        assert!(verify_artifact(&artifact, &version, &source)
+            .unwrap_err()
+            .contains("inventory path is missing"));
+    }
 }

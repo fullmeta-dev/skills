@@ -256,26 +256,31 @@ pub fn resolve_git_pin(source: &SourceSpec, reference: Option<&str>) -> Result<G
     })
 }
 
+/// Return the immutable pin for the complete local source snapshot.
+///
+/// `source_subpath` is deliberately not part of the artifact identity. It is
+/// validated by callers and applied later when the installed snapshot is
+/// discovered for activation. Keep the argument for the tree- API used by
+/// existing callers and older lockfiles.
 pub fn local_pin(source: &SourceSpec, subpath: &str) -> Result<String, String> {
+    if !subpath.is_empty() {
+        validate_subpath(Some(subpath))?;
+    }
     let root = source
         .resolved_path
         .as_deref()
         .ok_or_else(|| "local source path is unavailable".to_string())?;
-    let selected = if subpath.is_empty() {
-        root.to_path_buf()
-    } else {
-        let selected = root.join(subpath);
-        let selected = fs::canonicalize(&selected)
+    if !subpath.is_empty() {
+        let selected = fs::canonicalize(root.join(subpath))
             .map_err(|error| format!("cannot resolve source subpath {subpath:?}: {error}"))?;
         if !selected.starts_with(root) {
             return Err("source subpath escapes the source root".into());
         }
-        selected
-    };
-    if !selected.is_dir() {
-        return Err(format!("source subpath is not a directory: {subpath}"));
+        if !selected.is_dir() {
+            return Err(format!("source subpath is not a directory: {subpath}"));
+        }
     }
-    Ok(format!("tree-{}", tree_digest(&selected)?))
+    Ok(format!("tree-{}", tree_digest(root)?))
 }
 
 pub fn canonical_version(value: &str, kind: SourceKind) -> Result<String, String> {
@@ -301,7 +306,7 @@ pub fn canonical_version(value: &str, kind: SourceKind) -> Result<String, String
     }
 }
 
-fn tree_digest(root: &Path) -> Result<String, String> {
+pub(crate) fn tree_digest(root: &Path) -> Result<String, String> {
     validate_links(root)?;
     let mut entries = Vec::new();
     let walker = WalkDir::new(root)
@@ -413,7 +418,13 @@ fn should_skip(path: &Path) -> bool {
     path.file_name().is_some_and(|name| {
         matches!(
             name.to_str(),
-            Some(".git") | Some(".mise-skills-manifest.json") | Some(".skills-backend")
+            Some(".git")
+                | Some("node_modules")
+                | Some("dist")
+                | Some("build")
+                | Some("__pycache__")
+                | Some(".mise-skills-manifest.json")
+                | Some(".skills-backend")
         )
     })
 }

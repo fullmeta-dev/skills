@@ -71,7 +71,7 @@ mise_cmd() {
 
 # This is the checked-in fixture's expected tree digest. It is intentionally a
 # test oracle, not a documented user workflow for calculating local versions.
-LOCAL_TREE_DIGEST="eeb70c5fcb3c0dabdd4ca77ab50ee00d963b48e648448a02af8d625f2974c772"
+LOCAL_TREE_DIGEST="539d72aae084df5ce20ed5c4009aa88e4cf785934f45e48c3a39be2f18bd3a27"
 LOCAL_VERSION="tree-$LOCAL_TREE_DIGEST"
 
 printf 'installing shipped plugin through mise plugins install\n'
@@ -96,8 +96,8 @@ mise_cmd install --jobs=1 > "$WORK_DIR/github-install.log" 2>&1 || {
     exit 1
 }
 GITHUB_INSTALL="$DATA_DIR/installs/skills-owner-repo/$SOURCE_REVISION"
-[[ -f "$GITHUB_INSTALL/demo/SKILL.md" ]]
-[[ -x "$GITHUB_INSTALL/demo/scripts/run.sh" ]]
+[[ -f "$GITHUB_INSTALL/skills/demo/SKILL.md" ]]
+[[ -x "$GITHUB_INSTALL/skills/demo/scripts/run.sh" ]]
 python3 - "$GITHUB_INSTALL/.mise-skills-manifest.json" "$SOURCE_REVISION" <<'PY'
 import json
 import sys
@@ -105,11 +105,11 @@ import sys
 manifest = json.load(open(sys.argv[1], encoding="utf-8"))
 revision = sys.argv[2]
 assert manifest["source"] == "github:owner/repo", manifest
-assert manifest["subpath"] == "skills", manifest
+assert manifest["subpath"] == ".", manifest
 assert manifest["version"] == f"rev:{revision}", manifest
 assert manifest["revision"] == f"rev:{revision}", manifest
 assert manifest["skills"] == [{
-    "path": "demo",
+    "path": "skills/demo",
     "tree": "5afb149df6000f52f46fdccc98d6f0888d9e54f46a01b1f695bf660868d0a49b",
 }], manifest
 PY
@@ -130,8 +130,8 @@ mise_cmd install --jobs=1 > "$WORK_DIR/local-install.log" 2>&1 || {
     exit 1
 }
 LOCAL_INSTALL="$DATA_DIR/installs/skills-local-source/$LOCAL_VERSION"
-[[ -f "$LOCAL_INSTALL/demo/SKILL.md" ]]
-[[ -x "$LOCAL_INSTALL/demo/scripts/run.sh" ]]
+[[ -f "$LOCAL_INSTALL/skills/demo/SKILL.md" ]]
+[[ -x "$LOCAL_INSTALL/skills/demo/scripts/run.sh" ]]
 python3 - "$LOCAL_INSTALL/.mise-skills-manifest.json" "$LOCAL_VERSION" "$LOCAL_TREE_DIGEST" <<'PY'
 import json
 import sys
@@ -139,10 +139,11 @@ import sys
 manifest = json.load(open(sys.argv[1], encoding="utf-8"))
 version, digest = sys.argv[2:]
 assert manifest["source"].startswith("path:"), manifest
-assert manifest["subpath"] == "skills", manifest
+assert manifest["subpath"] == ".", manifest
 assert manifest["version"] == version, manifest
 assert manifest["revision"] == version, manifest
 assert manifest["tree"] == digest, manifest
+assert manifest["skills"][0]["path"] == "skills/demo", manifest
 assert not any(
     value.startswith("tree:") for value in manifest.values() if isinstance(value, str)
 ), manifest

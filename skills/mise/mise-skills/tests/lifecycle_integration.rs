@@ -275,6 +275,266 @@ fn syncs_all_adapters_with_isolated_ownership_and_recovers_stale_links() {
 }
 
 #[test]
+fn same_revision_subpaths_use_one_complete_artifact_without_cross_activation() {
+    let temp = TempDir::new().unwrap();
+    let repository = temp.path().join("repository");
+    let first_project = temp.path().join("first-project");
+    let second_project = temp.path().join("second-project");
+    let data = temp.path().join("data");
+    let state = temp.path().join("state");
+    let home = temp.path().join("home");
+    for directory in [
+        &repository,
+        &first_project,
+        &second_project,
+        &data,
+        &state,
+        &home,
+    ] {
+        fs::create_dir_all(directory).unwrap();
+    }
+    for (name, marker) in [("one", "first"), ("two", "second")] {
+        let directory = repository.join("skills").join(name);
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(
+            directory.join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: {name}\n---\n"),
+        )
+        .unwrap();
+        fs::write(directory.join("marker.txt"), marker).unwrap();
+    }
+    Command::new("git")
+        .args(["init", "--quiet", repository.to_str().unwrap()])
+        .status()
+        .unwrap();
+    for (key, value) in [
+        ("user.email", "test@example.invalid"),
+        ("user.name", "test"),
+    ] {
+        assert!(Command::new("git")
+            .args(["-C", repository.to_str().unwrap(), "config", key, value])
+            .status()
+            .unwrap()
+            .success());
+    }
+    assert!(Command::new("git")
+        .args(["-C", repository.to_str().unwrap(), "add", "."])
+        .status()
+        .unwrap()
+        .success());
+    assert!(Command::new("git")
+        .args([
+            "-C",
+            repository.to_str().unwrap(),
+            "commit",
+            "--quiet",
+            "-m",
+            "fixture"
+        ])
+        .status()
+        .unwrap()
+        .success());
+    let revision = String::from_utf8(
+        Command::new("git")
+            .args(["-C", repository.to_str().unwrap(), "rev-parse", "HEAD"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap()
+    .trim()
+    .to_string();
+
+    let first_config = first_project.join("mise.toml");
+    let second_config = second_project.join("mise.toml");
+    let source = format!("git:file://{}", repository.display());
+    let envs = [
+        ("HOME", home.as_path()),
+        ("MISE_DATA_DIR", data.as_path()),
+        ("MISE_STATE_DIR", state.as_path()),
+    ];
+    for (project, config, subpath, selector) in [
+        (&first_project, &first_config, "skills/one", "one"),
+        (&second_project, &second_config, "skills/two", "two"),
+    ] {
+        let output = run(
+            project,
+            &[
+                "use",
+                "--path",
+                config.to_str().unwrap(),
+                &source,
+                selector,
+                "--subpath",
+                subpath,
+                "--agent",
+                "pi",
+            ],
+            &envs,
+        );
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    assert_eq!(version(&first_config), format!("rev:{revision}"));
+    assert_eq!(version(&second_config), format!("rev:{revision}"));
+
+    // Simulate mise's source+version artifact: it contains both subtrees,
+    // regardless of which declaration requested installation first.
+    let artifact = data
+        .join("installs")
+        .join("skills-local-repository")
+        .join(&revision);
+    copy_directory(&repository, &artifact);
+
+    for (project, config, skill) in [
+        (&first_project, &first_config, "one"),
+        (&second_project, &second_config, "two"),
+    ] {
+        let output = run(
+            project,
+            &["sync", "--path", config.to_str().unwrap(), "--locked"],
+            &envs,
+        );
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let target = project.join(format!(".pi/skills/{skill}"));
+        assert_eq!(
+            fs::canonicalize(&target).unwrap(),
+            fs::canonicalize(artifact.join("skills").join(skill)).unwrap()
+        );
+        assert_eq!(
+            fs::read_to_string(target.join("marker.txt")).unwrap(),
+            if skill == "one" { "first" } else { "second" }
+        );
+    }
+}
+
+#[test]
+fn remove_uninstalls_only_after_the_last_declaration_reference() {
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source");
+    let project = temp.path().join("project");
+    let data = temp.path().join("data");
+    let state = temp.path().join("state");
+    let home = temp.path().join("home");
+    let global_config = temp.path().join("global-config");
+    for directory in [&source, &project, &data, &state, &home, &global_config] {
+        fs::create_dir_all(directory).unwrap();
+    }
+    skill(&source, "one");
+    skill(&source, "two");
+    let config = project.join("mise.toml");
+    let source_arg = format!("path:{}", source.display());
+    let envs = [
+        ("HOME", home.as_path()),
+        ("MISE_DATA_DIR", data.as_path()),
+        ("MISE_STATE_DIR", state.as_path()),
+        ("MISE_CONFIG_DIR", global_config.as_path()),
+    ];
+    let output = run(
+        &project,
+        &[
+            "use",
+            "--path",
+            config.to_str().unwrap(),
+            &source_arg,
+            "one",
+            "two",
+            "--agent",
+            "pi",
+        ],
+        &envs,
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let pinned = version(&config);
+    let artifact = install_snapshot(&data, &pinned, &source);
+    let output = run(
+        &project,
+        &["sync", "--path", config.to_str().unwrap(), "--locked"],
+        &envs,
+    );
+    assert!(output.status.success());
+
+    let output = run(
+        &project,
+        &[
+            "remove",
+            "--path",
+            config.to_str().unwrap(),
+            "skills:local/source",
+            "one",
+        ],
+        &envs,
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        artifact.is_dir(),
+        "partial removal must retain the artifact"
+    );
+    assert!(project.join(".pi/skills/two").is_symlink());
+    assert!(!project.join(".pi/skills/one").exists());
+
+    let global_output = run(
+        &project,
+        &["use", "--global", &source_arg, "two", "--agent", "pi"],
+        &envs,
+    );
+    assert!(
+        global_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&global_output.stderr)
+    );
+    let output = run(
+        &project,
+        &[
+            "remove",
+            "--path",
+            config.to_str().unwrap(),
+            "skills:local/source",
+        ],
+        &envs,
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        artifact.exists(),
+        "a global declaration must retain the shared artifact"
+    );
+
+    let output = run(
+        &project,
+        &["remove", "--global", "skills:local/source"],
+        &envs,
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !artifact.exists(),
+        "the final scoped removal should delegate artifact cleanup to mise"
+    );
+}
+
+#[test]
 fn locked_sync_rejects_local_source_drift() {
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("source");

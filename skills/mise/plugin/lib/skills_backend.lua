@@ -521,8 +521,15 @@ function backend.install(ctx)
     end
 
     validate_links(source_root)
-    local selected_root = source_subroot(source_root, subpath)
-    local expected_digest = tree_digest(selected_root)
+    -- Validate the declaration's selection even though it must not narrow the
+    -- immutable artifact copied below.
+    source_subroot(source_root, subpath)
+    -- Install one complete, source+version keyed snapshot.  The source
+    -- subpath is a lifecycle selection, not an artifact boundary: two
+    -- declarations at the same revision must be able to reuse this exact
+    -- installation without whichever declaration ran first changing its
+    -- contents.
+    local expected_digest = tree_digest(source_root)
     if version_kind == "tree" and expected_digest:lower() ~= version_value then
         fail("local source changed: declared " .. version_value .. " but found " .. expected_digest)
     end
@@ -537,12 +544,15 @@ function backend.install(ctx)
         fail("mise did not supply an installation path")
     end
     run("rm -rf " .. quote(destination))
-    copy_snapshot(selected_root, destination)
+    copy_snapshot(source_root, destination)
     local installed_digest = tree_digest(destination)
     if installed_digest:lower() ~= expected_digest:lower() then
         fail("installed snapshot failed integrity verification")
     end
-    write_manifest(destination, canonical_source, subpath, canonical_version,
+    -- The artifact itself is always rooted at the complete source snapshot.
+    -- Keep this explicit in the manifest so lifecycle code can reject older
+    -- source_subpath-only artifacts rather than activating the wrong tree.
+    write_manifest(destination, canonical_source, "", canonical_version,
         kind == "path" and canonical_version or ("rev:" .. version_value), expected_digest)
     if temporary_root ~= nil then
         run("rm -rf " .. quote(temporary_root))
