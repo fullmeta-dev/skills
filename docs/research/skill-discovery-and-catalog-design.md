@@ -120,12 +120,12 @@ exclude = ["tag:experimental"]
   keeps evolving repositories and intentionally broad selectors convenient.
 
 All discovery and matching is evaluated against the pinned source version, so
-selectors are reproducible. Only `mise run skills -- upgrade` resolves a new
-Git ref and can therefore discover newly matching skills.
+selectors are reproducible. Only `skills upgrade` resolves a new Git ref and
+can therefore discover newly matching skills.
 
 ## Implementation approach
 
-The `mise-skills` CLI owns YAML parsing, TOML catalog parsing, walking,
+The `skills` executable owns YAML parsing, TOML catalog parsing, walking,
 selection, and extraction. The vfox backend plugin only checks out an exact
 source revision into mise's standard installation path.
 

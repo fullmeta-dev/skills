@@ -5,12 +5,16 @@ normal mise-managed executable, not a task wrapper.
 
 ## Configuration and install
 
-Install the pinned backend plugin and CLI with ordinary mise configuration:
+Install the pinned backend plugin into mise's plugin data, then declare the
+CLI as an ordinary mise tool. The plugin does not need a `[plugins]` entry in
+the selected config:
+
+```sh
+mise plugins install skills https://github.com/fullmeta-dev/skills.git#<plugin-commit>
+mise use -g github:fullmeta-dev/skills@0.1.0
+```
 
 ```toml
-[plugins]
-"vfox-backend:skills" = "https://github.com/fullmeta-dev/skills.git#<plugin-commit>"
-
 [tools."github:fullmeta-dev/skills"]
 version = "0.1.0"
 bin = "skills"
@@ -54,8 +58,10 @@ skills doctor [--global|--path PATH|--env ENV]
 for Git sources or `tree-<sha256>` for local sources. `track` records update
 intent only. `upgrade` is the explicit source-pin refresh; install, postinstall,
 and sync never follow tracks. `self-update` reads the release compatibility
-manifest and updates the CLI/backend pair only after the new CLI is installed.
-A failed self-update leaves the old declaration usable.
+manifest, inspects the installed backend in mise's plugin data, and updates the
+CLI/backend pair only after the new CLI is installed. A failed self-update
+leaves the old declaration usable and does not add or rewrite a plugin
+declaration in the selected config.
 
 ## Sources and selectors
 

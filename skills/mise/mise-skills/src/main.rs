@@ -739,7 +739,7 @@ fn self_update_command(args: SelfUpdateArgs) -> Result<(String, PathBuf), String
         || release.plugin_url.starts_with('-')
         || release.plugin_url.contains(['\0', '\n', '\r'])
         || release.plugin_url.chars().any(char::is_whitespace)
-        || release.plugin_revision.is_empty()
+        || release.plugin_revision.len() != 40
         || !release
             .plugin_revision
             .chars()
@@ -770,14 +770,10 @@ fn self_update_command(args: SelfUpdateArgs) -> Result<(String, PathBuf), String
             "CLI declaration {cli_key:?} must expose bin = \\\"skills\\\""
         ));
     }
-    let old_plugin = config
-        .document
-        .get("plugins")
-        .and_then(toml_edit::Item::as_table)
-        .and_then(|plugins| plugins.get("vfox-backend:skills"))
-        .and_then(toml_edit::Item::as_str)
-        .map(ToString::to_string)
-        .ok_or_else(|| "selected config does not declare vfox-backend:skills".to_string())?;
+    // The backend is installed in mise's plugin data, not necessarily
+    // repeated in the selected config. Capture that installed state before
+    // changing it so a failed pair update can restore the exact old plugin.
+    let old_plugin = inspect_installed_plugin()?;
 
     let collisions = collision_diagnostics(&config);
     if !collisions.is_empty() {
@@ -801,19 +797,18 @@ fn self_update_command(args: SelfUpdateArgs) -> Result<(String, PathBuf), String
     }
 
     let new_plugin = format!("{}#{}", release.plugin_url, release.plugin_revision);
-    if let Err(error) = install_plugin_pin(&new_plugin) {
-        let _ = install_plugin_pin(&old_plugin);
-        return Err(error);
-    }
+    install_plugin_pin(&new_plugin)?;
 
     if let Err(error) = config::update_cli_release(&mut config.document, version.as_str())
-        .and_then(|_| config::update_plugin_pin(&mut config.document, &new_plugin))
         .and_then(|_| config.save_if_changed(&before).map(|_| ()))
     {
-        let _ = install_plugin_pin(&old_plugin);
-        return Err(format!(
-            "cannot commit self-update; old config retained: {error}"
-        ));
+        let rollback = restore_installed_plugin(old_plugin.as_deref());
+        return Err(match rollback {
+            Ok(()) => format!("cannot commit self-update; old config retained: {error}"),
+            Err(rollback) => format!(
+                "cannot commit self-update; old config retained: {error}; plugin rollback failed: {rollback}"
+            ),
+        });
     }
     Ok((version, config.path))
 }
@@ -875,56 +870,65 @@ fn require_mise_version(minimum: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn install_plugin_pin(pin: &str) -> Result<(), String> {
-    let (desired_url, desired_revision) = pin.rsplit_once('#').ok_or_else(|| {
-        "backend compatibility pin must contain an URL and immutable revision".to_string()
-    })?;
-    let plugin_dir = std::env::var_os("MISE_DATA_DIR")
+fn mise_plugin_dir() -> Result<PathBuf, String> {
+    std::env::var_os("MISE_DATA_DIR")
         .map(PathBuf::from)
         .or_else(|| {
             std::env::var_os("HOME").map(|path| PathBuf::from(path).join(".local/share/mise"))
         })
-        .ok_or_else(|| "cannot determine mise data directory for backend plugin".to_string())?
-        .join("plugins/skills");
-    let installed_url = if plugin_dir.join(".git").is_dir() {
-        ProcessCommand::new("git")
-            .args([
-                "-C",
-                plugin_dir.to_str().unwrap_or_default(),
-                "config",
-                "--get",
-                "remote.origin.url",
-            ])
-            .output()
-            .ok()
-            .filter(|output| output.status.success())
-            .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
-    } else {
-        None
-    };
-    let installed_revision = if plugin_dir.join(".git").is_dir() {
-        ProcessCommand::new("git")
-            .args([
-                "-C",
-                plugin_dir.to_str().unwrap_or_default(),
-                "rev-parse",
-                "HEAD",
-            ])
-            .output()
-            .ok()
-            .filter(|output| output.status.success())
-            .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
-    } else {
-        None
-    };
-    if installed_url.as_deref() == Some(desired_url)
-        && installed_revision.as_deref() == Some(desired_revision)
-    {
-        return Ok(());
-    }
+        .ok_or_else(|| "cannot determine mise data directory for backend plugin".to_string())
+        .map(|path| path.join("plugins/skills"))
+}
 
+fn inspect_installed_plugin() -> Result<Option<String>, String> {
+    let plugin_dir = mise_plugin_dir()?;
+    if !plugin_dir.exists() {
+        return Ok(None);
+    }
+    if !plugin_dir.join(".git").exists() {
+        return Err(format!(
+            "cannot inspect installed skills backend: {} is not a Git plugin checkout",
+            plugin_dir.display()
+        ));
+    }
+    let directory = plugin_dir.to_str().ok_or_else(|| {
+        format!(
+            "cannot inspect installed skills backend path: {}",
+            plugin_dir.display()
+        )
+    })?;
+    let url = ProcessCommand::new("git")
+        .args(["-C", directory, "config", "--get", "remote.origin.url"])
+        .output()
+        .map_err(|error| format!("cannot inspect installed backend URL: {error}"))?;
+    if !url.status.success() {
+        return Err(process_failure("inspect installed backend URL", &url));
+    }
+    let url = String::from_utf8_lossy(&url.stdout).trim().to_string();
+    let revision = ProcessCommand::new("git")
+        .args(["-C", directory, "rev-parse", "HEAD"])
+        .output()
+        .map_err(|error| format!("cannot inspect installed backend revision: {error}"))?;
+    if !revision.status.success() {
+        return Err(process_failure(
+            "inspect installed backend revision",
+            &revision,
+        ));
+    }
+    let revision = String::from_utf8_lossy(&revision.stdout).trim().to_string();
+    if url.is_empty() || revision.is_empty() {
+        return Err(format!(
+            "installed skills backend has incomplete Git state: {}",
+            plugin_dir.display()
+        ));
+    }
+    Ok(Some(format!("{url}#{revision}")))
+}
+
+fn restore_installed_plugin(pin: Option<&str>) -> Result<(), String> {
+    let plugin_dir = mise_plugin_dir()?;
     let mise = std::env::var_os("MISE_BIN").unwrap_or_else(|| "mise".into());
-    if plugin_dir.is_dir() {
+    if plugin_dir.exists() {
         let remove = ProcessCommand::new(&mise)
             .args(["plugins", "uninstall", "--yes", "skills"])
             .output()
@@ -933,15 +937,38 @@ fn install_plugin_pin(pin: &str) -> Result<(), String> {
             return Err(process_failure("mise plugin uninstall", &remove));
         }
     }
-    let output = ProcessCommand::new(mise)
-        .args(["plugins", "install", "skills", pin])
-        .output()
-        .map_err(|error| format!("cannot run mise plugin install: {error}"))?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(process_failure("mise plugin install", &output))
+    if let Some(pin) = pin {
+        let output = ProcessCommand::new(mise)
+            .args(["plugins", "install", "skills", pin])
+            .output()
+            .map_err(|error| format!("cannot run mise plugin install: {error}"))?;
+        if !output.status.success() {
+            return Err(process_failure("mise plugin rollback install", &output));
+        }
     }
+    Ok(())
+}
+
+fn install_plugin_pin(pin: &str) -> Result<(), String> {
+    let (desired_url, desired_revision) = pin.rsplit_once('#').ok_or_else(|| {
+        "backend compatibility pin must contain an URL and immutable revision".to_string()
+    })?;
+    if desired_url.is_empty() || desired_revision.is_empty() {
+        return Err("backend compatibility pin must contain an URL and immutable revision".into());
+    }
+    let old = inspect_installed_plugin()?;
+    if old.as_deref() == Some(pin) {
+        return Ok(());
+    }
+    let result = restore_installed_plugin(Some(pin));
+    if let Err(error) = result {
+        let rollback = restore_installed_plugin(old.as_deref());
+        return Err(match rollback {
+            Ok(()) => error,
+            Err(rollback) => format!("{error}; plugin rollback failed: {rollback}"),
+        });
+    }
+    Ok(())
 }
 
 fn run_normal_mise_install(config: &Config, locked: bool, dry_run: bool) -> Result<String, String> {
@@ -1028,10 +1055,16 @@ fn collision_diagnostics(config: &Config) -> Vec<String> {
 
 fn skills_on_path() -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
+    // Inspect both spellings on every host. This keeps diagnostics portable
+    // when a Windows-created skills.exe is present on a Unix PATH (and vice
+    // versa), while the current executable comparison still filters our own
+    // binary.
     for directory in std::env::split_paths(&path) {
-        let candidate = directory.join("skills");
-        if candidate.is_file() {
-            return Some(candidate);
+        for name in ["skills", "skills.exe"] {
+            let candidate = directory.join(name);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
         }
     }
     None

@@ -374,15 +374,6 @@ pub fn update_cli_release(document: &mut DocumentMut, version: &str) -> Result<(
     Ok(())
 }
 
-pub fn update_plugin_pin(document: &mut DocumentMut, pin: &str) -> Result<(), String> {
-    let plugins = ensure_table(document, "plugins")?;
-    if !plugins.contains_key("vfox-backend:skills") {
-        return Err("config has no vfox-backend:skills plugin declaration".into());
-    }
-    replace_string(plugins, "vfox-backend:skills", pin);
-    Ok(())
-}
-
 pub fn ensure_postinstall(document: &mut DocumentMut) -> Result<(), String> {
     let hooks = ensure_table(document, "hooks")?;
     match hooks.get_mut("postinstall") {

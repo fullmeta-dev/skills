@@ -1,7 +1,10 @@
+use serde_json::json;
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use tempfile::TempDir;
+use walkdir::WalkDir;
 
 fn binary() -> &'static str {
     env!("CARGO_BIN_EXE_skills")
@@ -62,7 +65,117 @@ fn install_snapshot(data: &Path, version: &str, source: &Path) -> PathBuf {
             fs::copy(entry.path(), destination).unwrap();
         }
     }
+    write_manifest(&install, &format!("path:{}", source.display()), version);
     install
+}
+
+fn digest_tree(root: &Path) -> String {
+    let mut entries = Vec::new();
+    for item in WalkDir::new(root)
+        .follow_links(false)
+        .min_depth(1)
+        .into_iter()
+        .filter_entry(|entry| {
+            !matches!(
+                entry.file_name().to_str(),
+                Some(".git")
+                    | Some("node_modules")
+                    | Some("dist")
+                    | Some("build")
+                    | Some("__pycache__")
+                    | Some(".mise-skills-manifest.json")
+                    | Some(".skills-backend")
+            )
+        })
+    {
+        let entry = item.unwrap();
+        let relative = entry
+            .path()
+            .strip_prefix(root)
+            .unwrap()
+            .to_string_lossy()
+            .replace(std::path::MAIN_SEPARATOR, "/");
+        let executable = if entry.file_type().is_symlink() {
+            false
+        } else {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                entry.metadata().unwrap().permissions().mode() & 0o111 != 0
+            }
+            #[cfg(not(unix))]
+            {
+                false
+            }
+        };
+        let (kind, payload) = if entry.file_type().is_dir() {
+            ("directory", Vec::new())
+        } else if entry.file_type().is_symlink() {
+            let mut payload = fs::read_link(entry.path())
+                .unwrap()
+                .to_string_lossy()
+                .as_bytes()
+                .to_vec();
+            payload.push(b'\n');
+            ("symlink", payload)
+        } else {
+            ("file", fs::read(entry.path()).unwrap())
+        };
+        entries.push((relative, kind, executable, payload));
+    }
+    entries.sort_by(|left, right| left.0.as_bytes().cmp(right.0.as_bytes()));
+    let mut hasher = Sha256::new();
+    for (relative, kind, executable, payload) in entries {
+        hasher.update(relative.as_bytes());
+        hasher.update([0]);
+        hasher.update(kind.as_bytes());
+        hasher.update([0]);
+        hasher.update(if executable { b"1" } else { b"0" });
+        hasher.update([0]);
+        hasher.update(payload.len().to_string().as_bytes());
+        hasher.update([0]);
+        hasher.update(payload);
+        hasher.update([0]);
+    }
+    format!("{:x}", hasher.finalize())
+}
+
+fn write_manifest(artifact: &Path, source: &str, version: &str) {
+    let mut skills = Vec::new();
+    for item in WalkDir::new(artifact)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|entry| entry.file_name() != ".mise-skills-manifest.json")
+    {
+        let entry = item.unwrap();
+        if entry.file_name() != "SKILL.md" {
+            continue;
+        }
+        let parent = entry.path().parent().unwrap();
+        let path = parent.strip_prefix(artifact).unwrap();
+        let path = if path.as_os_str().is_empty() {
+            ".".to_string()
+        } else {
+            path.to_string_lossy()
+                .replace(std::path::MAIN_SEPARATOR, "/")
+        };
+        skills.push(json!({"path": path, "tree": digest_tree(parent)}));
+    }
+    skills.sort_by(|left, right| left["path"].as_str().cmp(&right["path"].as_str()));
+    let manifest = json!({
+        "schema_version": 1,
+        "source": source,
+        "subpath": ".",
+        "version": version,
+        "revision": version,
+        "tree": digest_tree(artifact),
+        "skills": skills,
+    });
+    fs::write(
+        artifact.join(".mise-skills-manifest.json"),
+        serde_json::to_vec(&manifest).unwrap(),
+    )
+    .unwrap();
 }
 
 fn copy_directory(source: &Path, destination: &Path) {
@@ -287,6 +400,115 @@ fn syncs_all_adapters_with_isolated_ownership_and_recovers_stale_links() {
 }
 
 #[test]
+#[cfg(unix)]
+fn refuses_adapter_roots_and_intermediate_paths_that_escape_project_root() {
+    use std::os::unix::fs::symlink;
+
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source");
+    fs::create_dir_all(source.join("demo")).unwrap();
+    fs::write(
+        source.join("demo/SKILL.md"),
+        "---\nname: demo\ndescription: test\n---\n",
+    )
+    .unwrap();
+    let envs = [
+        ("HOME", temp.path().join("home")),
+        ("MISE_DATA_DIR", temp.path().join("data")),
+        ("MISE_STATE_DIR", temp.path().join("state")),
+    ];
+    for (name, root_kind) in [("intermediate", "intermediate"), ("adapter-root", "root")] {
+        let project = temp.path().join(name);
+        let outside = temp.path().join(format!("{name}-outside"));
+        fs::create_dir_all(&project).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        if root_kind == "intermediate" {
+            symlink(&outside, project.join(".pi")).unwrap();
+        } else {
+            fs::create_dir_all(project.join(".pi")).unwrap();
+            symlink(&outside, project.join(".pi/skills")).unwrap();
+        }
+        let config = project.join("mise.toml");
+        let source_arg = format!("path:{}", source.display());
+        let output = run(
+            &project,
+            &[
+                "use",
+                "--path",
+                config.to_str().unwrap(),
+                &source_arg,
+                "demo",
+                "--agent",
+                "pi",
+            ],
+            &envs
+                .iter()
+                .map(|(key, value)| (*key, value.as_path()))
+                .collect::<Vec<_>>(),
+        );
+        assert!(output.status.success());
+        let pinned = version(&config);
+        install_snapshot(&envs[1].1, &pinned, &source);
+        let output = run(
+            &project,
+            &["sync", "--path", config.to_str().unwrap(), "--locked"],
+            &envs
+                .iter()
+                .map(|(key, value)| (*key, value.as_path()))
+                .collect::<Vec<_>>(),
+        );
+        assert!(!output.status.success());
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(error.contains("escapes expected root"), "{error}");
+        assert!(!outside.join("demo").exists());
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn refuses_global_adapter_path_symlinks_that_escape_home() {
+    use std::os::unix::fs::symlink;
+
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source");
+    let home = temp.path().join("home");
+    let config_dir = temp.path().join("config");
+    let outside = temp.path().join("outside");
+    let data = temp.path().join("data");
+    let state = temp.path().join("state");
+    for directory in [&source, &home, &config_dir, &outside, &data, &state] {
+        fs::create_dir_all(directory).unwrap();
+    }
+    fs::create_dir_all(source.join("demo")).unwrap();
+    fs::write(
+        source.join("demo/SKILL.md"),
+        "---\nname: demo\ndescription: test\n---\n",
+    )
+    .unwrap();
+    symlink(&outside, home.join(".agents")).unwrap();
+    let config = config_dir.join("config.toml");
+    let source_arg = format!("path:{}", source.display());
+    let envs = [
+        ("HOME", home.as_path()),
+        ("MISE_CONFIG_DIR", config_dir.as_path()),
+        ("MISE_DATA_DIR", data.as_path()),
+        ("MISE_STATE_DIR", state.as_path()),
+    ];
+    let output = run(
+        temp.path(),
+        &["use", "--global", &source_arg, "demo", "--agent", "agents"],
+        &envs,
+    );
+    assert!(output.status.success());
+    install_snapshot(&data, &version(&config), &source);
+    let output = run(temp.path(), &["sync", "--global", "--locked"], &envs);
+    assert!(!output.status.success());
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(error.contains("escapes expected root"), "{error}");
+    assert!(!outside.join("skills/demo").exists());
+}
+
+#[test]
 fn same_revision_subpaths_use_one_complete_artifact_without_cross_activation() {
     let temp = TempDir::new().unwrap();
     let repository = temp.path().join("repository");
@@ -400,6 +622,11 @@ fn same_revision_subpaths_use_one_complete_artifact_without_cross_activation() {
         .join("skills-local-repository")
         .join(&revision);
     copy_directory(&repository, &artifact);
+    write_manifest(
+        &artifact,
+        &format!("git:file://{}", repository.display()),
+        &format!("rev:{revision}"),
+    );
 
     for (project, config, skill) in [
         (&first_project, &first_config, "one"),

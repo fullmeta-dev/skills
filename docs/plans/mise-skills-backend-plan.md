@@ -10,8 +10,8 @@
 Superseded by issue #7 implementation.
 
 This project adds a real **vfox backend plugin** for immutable skill-source
-snapshots and a small **`mise-skills` CLI** for skill-specific commands. It
-does not fork mise or require an upstream mise patch.
+snapshots and the **`skills` executable** for skill-specific commands. It does
+not fork mise or require an upstream mise patch.
 
 The settled discovery contract is in
 [`../research/skill-discovery-and-catalog-design.md`](../research/skill-discovery-and-catalog-design.md).
@@ -73,62 +73,48 @@ skills through the skills CLI instead.
 
 ### Skill-specific CLI
 
-The global mise config installs the CLI as a normal versioned tool and exposes
-it through a normal task:
+The supported public interface is the `skills` executable installed as an
+ordinary mise tool. The earlier task-wrapper design is superseded:
 
 ```toml
 [tools]
-"github:fullmeta-dev/skills" = { version = "0.1.0", bin = "mise-skills" }
-
-[tasks.skills]
-description = "Manage Agent Skills"
-dir = "{{cwd}}"
-run = "mise-skills ${usage_arguments-}"
-raw = true
+"github:fullmeta-dev/skills" = { version = "0.1.0", bin = "skills" }
 ```
-
-The stable documented and scripted invocation is:
-
-```sh
-mise run skills -- <command> [arguments]
-```
-
-For interactive convenience, `mise skills ...` is supported as mise's task
-shorthand. Mise documents that direct task shorthand can be shadowed by a
-future built-in command, so it is never used in automation, generated hooks,
-or documentation that must remain forward-compatible.
 
 The CLI owns commands the generic tool interface cannot express naturally:
 
 ```sh
-mise run skills -- list <source> [--tree] [--json]
-mise run skills -- use [--global|--path PATH] <source> <selector...> --agent <agent...>
-mise run skills -- sync [--global|--path PATH] [--locked]
-mise run skills -- status [--json]
-mise run skills -- upgrade [<skills-tool>...]
-mise run skills -- remove [--global|--path PATH] <skills-tool> [<selector...>]
-mise run skills -- prune [--global|--path PATH]
+skills list <source> [--tree] [--json]
+skills use [--global|--path PATH] <source> <selector...> --agent <agent...>
+skills sync [--global|--path PATH] [--locked]
+skills status [--json]
+skills upgrade [<skills-tool>...]
+skills remove [--global|--path PATH] <skills-tool> [<selector...>]
+skills prune [--global|--path PATH]
 ```
 
 `use`, `upgrade`, and `remove` edit `mise.toml` with a TOML AST editor,
 preserving comments, unrelated tables, and existing hooks.
 
-## Bootstrap and machine setup
+## Historical bootstrap and machine setup (superseded)
+
+The following bootstrap design is retained only to explain the original
+implementation milestones; it is not a supported setup path.
 
 ### Global configuration
 
 The user-owned global mise config, tracked in dotfiles, declares:
 
 1. the skills backend plugin source and exact plugin revision;
-2. the `mise-skills` CLI release; and
-3. the `skills` task above.
+2. the `skills` CLI release; and
+3. the direct `skills` commands above.
 
 ```toml
 [plugins]
 "vfox-backend:skills" = "https://github.com/fullmeta-dev/skills.git#<plugin-commit>"
 
 [tools]
-"github:fullmeta-dev/skills" = { version = "0.1.0", bin = "mise-skills" }
+"github:fullmeta-dev/skills" = { version = "0.1.0", bin = "skills" }
 ```
 
 `[plugins]` records the desired plugin repository but does not itself install
@@ -145,7 +131,7 @@ The installer command is idempotent: it checks the installed plugin URL/ref
 first and only replaces it when the pinned plugin revision differs. The
 implementation must never use `--force` unconditionally.
 
-`mise bootstrap` then installs the global `mise-skills` CLI and every active
+`mise bootstrap` then installs the global `skills` CLI and every active
 `skills:*` source tool. This hook depends on the documented `pre-tools`
 bootstrap phase. Milestone 0 pins the minimum mise release that provides it;
 older mise versions fail with a clear upgrade instruction before attempting
@@ -153,12 +139,12 @@ skill installation.
 
 ### Project configuration
 
-`mise run skills -- use` writes the source declaration and appends the
+The historical task wrapper wrote the source declaration and appended the
 following ordinary mise postinstall hook to its owning config root:
 
 ```toml
 [hooks]
-postinstall = ["mise run skills -- sync --locked"]
+postinstall = ["skills sync --locked"]
 ```
 
 Mise documents that general `postinstall` hooks run even when `mise install`
@@ -393,8 +379,8 @@ Pin the exact minimum mise release only when all pass:
 3. `[tools."skills:..."]` passes string, array, and nested options to the
    backend unchanged;
 4. general postinstall hooks run after a no-op `mise install`;
-5. the global `mise-skills` tool is available to the postinstall hook;
-6. canonical `mise run skills -- sync --locked` forwards arguments unchanged.
+5. the global `skills` tool is available to the postinstall hook;
+6. canonical `skills sync --locked` forwards arguments unchanged.
 
 Record the exact mise release in the README and fail early below it. The plan
 depends only on documented backend plugins, tool options, bootstrap hooks, and
@@ -410,10 +396,10 @@ Pi, records one config-root ownership manifest, and removes it.
 Prove end-to-end:
 
 ```sh
-mise run skills -- use ../skills-demo hello --agent pi
+skills use ../skills-demo hello --agent pi
 mise install
-mise run skills -- status
-mise run skills -- remove skills:local/skills-demo hello
+skills status
+skills remove skills:local/skills-demo hello
 ```
 
 Rerunning install/sync is a no-op.
@@ -452,18 +438,17 @@ and complete the documentation and help deliverables below.
 The feature is not complete until it is self-describing in the CLI and easy to
 bootstrap from repository documentation.
 
-- Implement `mise-skills --help` and every subcommand's `--help` with a short
+- Implement `skills --help` and every subcommand's `--help` with a short
   purpose, argument/flag descriptions, scope behavior, and copy-pasteable
   examples. `list`, `use`, `sync`, `status`, `upgrade`, `remove`, and `prune`
   must each explain their normal and failure paths.
 - Give the global mise `skills` task a `description` and `usage` definition so
   `mise tasks info skills` is useful. Mise reserves an unseparated task
   `--help` for task help when `usage` is present, so
-  `mise run skills -- --help` is the side-effect-free CLI-help invocation;
-  `mise run skills --help` remains side-effect-free task help.
+  direct executable help is side-effect-free for the CLI and every subcommand.
 - Generate and ship shell completions from the CLI for Bash, Zsh, Fish, and
   PowerShell; document installation through mise.
-- Rewrite this repository's `README.md` so the mise-skills quick start is
+- Rewrite this repository's `README.md` so the direct skills quick start is
   prominent while preserving the existing repository-as-skill-source usage.
   Include prerequisites, one-command bootstrap, minimal global and project
   setup, plus upgrade and removal examples.

@@ -78,12 +78,12 @@ fn self_update_keeps_old_config_when_normal_mise_install_fails() {
     fs::create_dir_all(&config_dir).unwrap();
     let mise = fake_mise(&bin_dir);
     let config = config_dir.join("config.toml");
-    let old = "[plugins]\n\"vfox-backend:skills\" = \"https://old/plugin.git#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"\n[tools.\"github:fullmeta-dev/skills\"]\nversion = \"0.0.1\"\nbin = \"skills\"\n";
+    let old = "# preserve this config\n[tools.\"github:fullmeta-dev/skills\"]\nversion = \"0.0.1\"\nbin = \"skills\"\n";
     fs::write(&config, old).unwrap();
     let manifest = temp.path().join("compat.json");
     fs::write(
         &manifest,
-        r#"{"schema_version":1,"latest":"0.2.0","releases":{"0.2.0":{"minimum_mise":"2026.6.14","plugin_url":"https://new/plugin.git","plugin_revision":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}}"#,
+        r#"{"schema_version":1,"latest":"0.2.0","releases":{"0.2.0":{"minimum_mise":"2026.6.14","plugin_url":"https://new/plugin.git","plugin_revision":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}}"#,
     )
     .unwrap();
     let output = Command::new(binary())
@@ -122,5 +122,33 @@ fn self_update_keeps_old_config_when_normal_mise_install_fails() {
     );
     let updated = fs::read_to_string(&config).unwrap();
     assert!(updated.contains("version = \"0.2.0\""));
-    assert!(updated.contains("https://new/plugin.git#bbbbbbbb"));
+    assert!(updated.contains("# preserve this config"));
+    assert!(!updated.contains("vfox-backend:skills"));
+    assert!(!updated.contains("https://new/plugin.git"));
+}
+
+#[test]
+#[cfg(unix)]
+fn detects_foreign_windows_executable_on_portable_path() {
+    let temp = TempDir::new().unwrap();
+    let bin_dir = temp.path().join("bin");
+    let project = temp.path().join("project");
+    fs::create_dir_all(&bin_dir).unwrap();
+    fs::create_dir_all(&project).unwrap();
+    let mise = fake_mise(&bin_dir);
+    fs::write(bin_dir.join("skills.exe"), "foreign").unwrap();
+    let config = project.join("mise.toml");
+    let output = Command::new(binary())
+        .current_dir(&project)
+        .args(["install", "--path", config.to_str().unwrap()])
+        .env("MISE_BIN", &mise)
+        .env("HOME", temp.path().join("home"))
+        .env("PATH", &bin_dir)
+        .env("FAKE_MISE_LOG", temp.path().join("mise.log"))
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("PATH owner:"), "{stderr}");
+    assert!(stderr.contains("skills.exe"), "{stderr}");
 }

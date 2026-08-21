@@ -74,6 +74,8 @@ struct DesiredLink {
     skill: String,
     target: PathBuf,
     link: PathBuf,
+    root: PathBuf,
+    boundary: PathBuf,
     source: String,
     version: String,
 }
@@ -110,23 +112,30 @@ impl Adapter {
         }
     }
 
-    fn root(self, global: bool, config_root: &Path) -> Result<PathBuf, String> {
+    fn boundary(self, global: bool, config_root: &Path) -> Result<PathBuf, String> {
         if global {
             let home = std::env::var_os("HOME")
                 .map(PathBuf::from)
                 .ok_or_else(|| "cannot determine HOME for global skill links".to_string())?;
-            Ok(match self {
-                Self::Agents => home.join(".agents").join("skills"),
-                Self::Pi => home.join(".pi").join("agent").join("skills"),
-                Self::Claude => home.join(".claude").join("skills"),
+            fs::canonicalize(&home).map_err(|error| {
+                format!(
+                    "cannot resolve HOME for global skill links {}: {error}",
+                    home.display()
+                )
             })
         } else {
-            Ok(match self {
-                Self::Agents => config_root.join(".agents").join("skills"),
-                Self::Pi => config_root.join(".pi").join("skills"),
-                Self::Claude => config_root.join(".claude").join("skills"),
-            })
+            Ok(config_root.to_path_buf())
         }
+    }
+
+    fn root(self, global: bool, config_root: &Path) -> Result<PathBuf, String> {
+        let base = self.boundary(global, config_root)?;
+        Ok(match self {
+            Self::Agents => base.join(".agents").join("skills"),
+            Self::Pi if global => base.join(".pi").join("agent").join("skills"),
+            Self::Pi => base.join(".pi").join("skills"),
+            Self::Claude => base.join(".claude").join("skills"),
+        })
     }
 }
 
@@ -592,6 +601,15 @@ fn desired_tool_links(
     if adapters.is_empty() {
         return Err(format!("skill tool {} has no agents", tool.key));
     }
+    let boundaries = adapters
+        .iter()
+        .map(|adapter| {
+            let root = adapter.root(global, &config.root)?;
+            let boundary = adapter.boundary(global, &config.root)?;
+            validate_adapter_root(&root, &boundary)?;
+            Ok((*adapter, root, boundary))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
     let mut result = Vec::new();
     for skill in selection.selected {
         validate_skill_target(&skill.name)?;
@@ -602,8 +620,7 @@ fn desired_tool_links(
                 skill.path
             ));
         }
-        for adapter in &adapters {
-            let root = adapter.root(global, &config.root)?;
+        for (adapter, root, boundary) in &boundaries {
             let target = root.join(&skill.name);
             let link = relative_path(root.as_path(), &source_skill)?;
             result.push(DesiredLink {
@@ -612,6 +629,8 @@ fn desired_tool_links(
                 skill: skill.name.clone(),
                 target,
                 link,
+                root: root.clone(),
+                boundary: boundary.clone(),
                 source: source_skill.display().to_string(),
                 version: version.clone(),
             });
@@ -741,6 +760,7 @@ fn symlink_target(path: &Path) -> TargetState {
 }
 
 fn create_link(desired: &DesiredLink) -> Result<(), String> {
+    validate_adapter_root(&desired.root, &desired.boundary)?;
     create_symlink(&desired.link, &desired.target)
 }
 
@@ -825,17 +845,18 @@ fn absolute_path(path: &Path) -> Result<PathBuf, String> {
 
 fn verify_artifact(path: &Path, version: &str, source: &SourceSpec) -> Result<(), String> {
     let manifest_path = path.join(".mise-skills-manifest.json");
-    if !manifest_path.is_file() {
-        // Manifests were added after tree- pins shipped. Keep accepting a
-        // manifest-less legacy artifact, but never infer a source subpath from
-        // its layout: callers always apply the declaration subpath below.
-        return Ok(());
-    }
     let contents = fs::read_to_string(&manifest_path).map_err(|error| {
-        format!(
-            "cannot read artifact manifest {}: {error}",
-            manifest_path.display()
-        )
+        if error.kind() == std::io::ErrorKind::NotFound {
+            format!(
+                "installed artifact is missing its backend manifest: {}",
+                manifest_path.display()
+            )
+        } else {
+            format!(
+                "cannot read artifact manifest {}: {error}",
+                manifest_path.display()
+            )
+        }
     })?;
     let manifest: serde_json::Value = serde_json::from_str(&contents).map_err(|error| {
         format!(
@@ -1191,6 +1212,8 @@ fn validate_ownership_manifest(
     for link in &manifest.links {
         let adapter = Adapter::parse(&link.adapter)?;
         let adapter_root = adapter.root(global, config_root)?;
+        let boundary = adapter.boundary(global, config_root)?;
+        validate_adapter_root(&adapter_root, &boundary)?;
         let target = validate_owned_target(&link.target, &adapter_root).map_err(|error| {
             format!(
                 "ownership manifest link {} has unsafe target: {error}",
@@ -1202,6 +1225,60 @@ fn validate_ownership_manifest(
             return Err(format!(
                 "ownership manifest contains duplicate target {}",
                 link.target
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_adapter_root(adapter_root: &Path, boundary: &Path) -> Result<(), String> {
+    let adapter_root = normalize_absolute_path(adapter_root)?;
+    let boundary = normalize_absolute_path(boundary)?;
+    if !adapter_root.starts_with(&boundary) {
+        return Err(format!(
+            "adapter root {} is outside expected root {}",
+            adapter_root.display(),
+            boundary.display()
+        ));
+    }
+
+    let relative = adapter_root
+        .strip_prefix(&boundary)
+        .map_err(|error| error.to_string())?;
+    let mut current = boundary.clone();
+    for component in relative.components() {
+        let Component::Normal(part) = component else {
+            continue;
+        };
+        current.push(part);
+        let metadata = match fs::symlink_metadata(&current) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+            Err(error) => {
+                return Err(format!(
+                    "cannot inspect adapter path {}: {error}",
+                    current.display()
+                ))
+            }
+        };
+        if metadata.file_type().is_symlink() {
+            let resolved = fs::canonicalize(&current).map_err(|error| {
+                format!(
+                    "adapter path symlink {} cannot be resolved safely: {error}",
+                    current.display()
+                )
+            })?;
+            if !resolved.starts_with(&boundary) {
+                return Err(format!(
+                    "adapter path symlink {} escapes expected root {}",
+                    current.display(),
+                    boundary.display()
+                ));
+            }
+        } else if !metadata.is_dir() {
+            return Err(format!(
+                "adapter path {} is not a directory",
+                current.display()
             ));
         }
     }
@@ -1359,6 +1436,13 @@ mod tests {
         )
         .unwrap();
         verify_artifact(&artifact, &version, &source).unwrap();
+    }
+
+    #[test]
+    fn rejects_manifestless_installed_artifact() {
+        let (_temp, artifact, source, version, _tree) = manifest_fixture();
+        let error = verify_artifact(&artifact, &version, &source).unwrap_err();
+        assert!(error.contains("missing its backend manifest"), "{error}");
     }
 
     #[test]

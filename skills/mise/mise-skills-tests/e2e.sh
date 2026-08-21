@@ -54,9 +54,8 @@ export PATH="$(dirname "$CLI_BIN"):$PATH"
 cd "$PROJECT_DIR"
 
 "$MISE_BIN" plugins install skills "file://$PLUGIN_REPO#$PLUGIN_REF" >/dev/null
-cat > "$PROJECT_DIR/mise.toml" <<EOF
-[plugins]
-"vfox-backend:skills" = "file://$PLUGIN_REPO#$PLUGIN_REF"
+cat > "$PROJECT_DIR/mise.toml" <<'EOF'
+# The backend is installed in mise plugin data, as in the README flow.
 EOF
 SOURCE_ARG="path:$SOURCE_DIR"
 "$CLI_BIN" use --path "$PROJECT_DIR/mise.toml" "$SOURCE_ARG" demo --agent agents --agent pi --agent claude

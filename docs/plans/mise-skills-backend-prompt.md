@@ -1,4 +1,4 @@
-Implement the mise-skills feature through GitHub issues #1–#6 in
+Implement the mise-managed Agent Skills feature through GitHub issues #1–#6 in
 fullmeta-dev/skills. Read AGENTS.md,
 docs/plans/mise-skills-backend-plan.md, and
 docs/research/skill-discovery-and-catalog-design.md completely before work.

@@ -60,8 +60,10 @@ skills self-update
 ```
 
 `self-update` reads [`release-compatibility.json`](release-compatibility.json),
-installs the release before changing the selected config, and retains the old
-config when any step fails. Inspect collisions before accepting a replacement:
+inspects the installed backend in mise plugin data, installs the release before
+changing the selected config, and retains the old config when any step fails.
+The backend plugin does not need a manually repeated `[plugins]` declaration.
+Inspect collisions before accepting a replacement:
 
 ```sh
 skills doctor --global
