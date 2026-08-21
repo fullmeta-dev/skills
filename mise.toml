@@ -70,3 +70,12 @@ PYTHONPATH = "{{ config_root }}/mise/lib"
 #
 #  - mise run docs:pitchfork
 #  - mise run docs:pitchfork <branch-or-tag>
+
+[tasks.skills]
+description = "Manage Agent Skills"
+usage = '''
+arg "[arguments]" var=#true help="mise-skills command and arguments"
+'''
+dir = "{{cwd}}"
+run = "mise-skills"
+raw = true

@@ -3,6 +3,10 @@ mod lifecycle;
 mod source;
 
 use clap::{Args, CommandFactory, Parser, Subcommand};
+use clap_complete::{
+    generate,
+    shells::{Bash, Fish, PowerShell, Zsh},
+};
 use config::{Config, Scope};
 use mise_skills::{discover_with_subpath, DiagnosticLevel, Explain, Selection, Skill};
 use serde::Serialize;
@@ -10,6 +14,7 @@ use source::{
     canonical_version, local_pin, resolve_git_pin, validate_subpath, SourceKind, SourceSpec,
 };
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command as ProcessCommand, ExitCode};
 
@@ -17,7 +22,9 @@ use std::process::{Command as ProcessCommand, ExitCode};
 #[command(
     name = "mise-skills",
     version,
-    about = "Discover and manage Agent Skills from immutable source snapshots"
+    about = "Discover and manage Agent Skills from immutable source snapshots",
+    long_about = "Discover and manage Agent Skills from immutable source snapshots. Choose a friendly source and selectors; mise-skills resolves an immutable pin, while only upgrade follows an explicit track.",
+    after_help = "Normal behavior: list is read-only; use, upgrade, and remove edit the selected mise config; sync and prune only touch links owned by that config root. Failures are reported on stderr with a non-zero exit status and leave unrelated files untouched.\n\nScope: project is the default; use --global for the user config or --path PATH for one config file.\n\nExamples:\n  mise run skills -- list path:../skills-source --json\n  mise run skills -- use fullmeta-dev/skills code-review --agent pi\n  mise run skills -- sync --locked\n  mise run skills -- status --json\n  mise run skills -- completions bash"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -27,19 +34,52 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Command {
     /// List discovered skills, optionally applying selectors.
+    #[command(
+        after_help = "Normal: reads the local source and prints selected skills; missing selectors are warnings, not failures. Failure: malformed source data, unsafe links, or discovery errors return non-zero without editing files. Scope: source and optional --subpath only; no mise config is read. Example: mise run skills -- list path:../skills-source --include tag:web --tree"
+    )]
     List(ListArgs),
     /// Declare a source and selected skills, resolving its immutable pin.
+    #[command(
+        after_help = "Normal: writes a source declaration, selectors, agents, and a postinstall sync hook to the selected mise config. Git sources resolve a full commit; local sources resolve a tree pin. Failure: invalid source, selector policy, agent, ref, or config leaves the file unchanged. Scope: project by default, or --global/--path. Example: mise run skills -- use fullmeta-dev/skills code-review --agent pi --agent claude"
+    )]
     Use(UseArgs),
     /// Refresh immutable pins for declared sources. This never installs or syncs.
+    #[command(
+        after_help = "Normal: resolves each declared source's explicit track and changes only its immutable version. Without --locked, this is the only command that follows track. Failure: an undeclared tool, invalid source, or unavailable ref returns non-zero and does not install or sync. Scope: project by default, or --global/--path. Example: mise run skills -- upgrade skills:fullmeta-dev/skills"
+    )]
     Upgrade(UpgradeArgs),
     /// Converge the selected configuration without following update tracks.
+    #[command(
+        after_help = "Normal: verifies installed immutable artifacts and repairs only links owned by this config root; --locked forbids version resolution. Failure: missing artifacts, local drift, unsafe links, or conflicts are reported and unmanaged targets remain untouched. Scope: project by default, or --global/--path. Example: mise run skills -- sync --locked"
+    )]
     Sync(SyncArgs),
     /// Show declared skill sources and their link state.
+    #[command(
+        after_help = "Normal: reports declarations, immutable versions, and active, missing, dangling, or conflicting links without changing files. Failure: invalid config data returns non-zero. Scope: project by default, or --global/--path. Example: mise run skills -- status --global --json"
+    )]
     Status(StatusArgs),
     /// Remove a declaration or selected entries from its include policy.
+    #[command(
+        after_help = "Normal: removes selected includes or the whole declaration, syncs owned links, and delegates normal mise artifact removal only when unreferenced. Failure: unknown tools, selectors, or changed unmanaged links are reported without deleting unrelated targets. Scope: project by default, or --global/--path. Example: mise run skills -- remove skills:fullmeta-dev/skills code-review"
+    )]
     Remove(RemoveArgs),
     /// Remove stale links recorded for the selected configuration root.
+    #[command(
+        after_help = "Normal: removes only stale links recorded for this config root and never materializes desired links. Failure: changed or unmanaged targets are reported and left untouched. Scope: project by default, or --global/--path. Example: mise run skills -- prune --global"
+    )]
     Prune(PruneArgs),
+    /// Report strict Agent Skills conformance without blocking normal use.
+    #[command(
+        visible_alias = "check",
+        after_help = "Normal: prints non-blocking diagnostics for strict Agent Skills consumers; the intentional top-level tags extension is reported but remains valid for normal discovery and installation. Failure: unreadable sources or ordinary discovery errors return non-zero. Scope: source and optional --subpath only; no config, network, or installation side effects. Example: mise run skills -- validate path:../skills-source --json"
+    )]
+    Validate(ValidateArgs),
+    /// Generate a completion script for one supported shell.
+    #[command(
+        visible_alias = "completion",
+        after_help = "Normal: writes a completion script to stdout and never edits config or contacts a source. Failure: unsupported shells are rejected before output. Example: mise run skills -- completions bash > ~/.local/share/bash-completion/completions/mise-skills"
+    )]
+    Completions(CompletionsArgs),
 }
 
 #[derive(Debug, Args)]
@@ -165,6 +205,31 @@ struct PruneArgs {
     scope: ScopeArgs,
 }
 
+#[derive(Debug, Args)]
+struct ValidateArgs {
+    /// Local checkout or snapshot directory. `path:` is accepted as a prefix.
+    source: PathBuf,
+    /// Select a source subpath before validation.
+    #[arg(long)]
+    subpath: Option<PathBuf>,
+    /// Emit stable machine-readable diagnostics.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Debug, Args)]
+struct CompletionsArgs {
+    /// Shell to generate: bash, zsh, fish, or powershell.
+    #[arg(value_parser = ["bash", "zsh", "fish", "powershell"])]
+    shell: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ValidateOutput {
+    source: String,
+    diagnostics: Vec<mise_skills::Diagnostic>,
+}
+
 #[derive(Debug, Serialize)]
 struct ListOutput {
     source: String,
@@ -216,6 +281,8 @@ fn main() -> ExitCode {
         Command::Status(args) => run_status(args),
         Command::Remove(args) => run_remove(args),
         Command::Prune(args) => run_prune(args),
+        Command::Validate(args) => run_validate(args),
+        Command::Completions(args) => run_completions(args),
     }
 }
 
@@ -273,6 +340,71 @@ fn run_list(args: ListArgs) -> ExitCode {
     } else {
         ExitCode::SUCCESS
     }
+}
+
+fn run_validate(args: ValidateArgs) -> ExitCode {
+    let source = strip_path_prefix(&args.source);
+    let discovery = match discover_with_subpath(&source, args.subpath.as_deref()) {
+        Ok(discovery) => discovery,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    let mut diagnostics = discovery.diagnostics.clone();
+    diagnostics.extend(discovery.strict_diagnostics());
+    let output = ValidateOutput {
+        source: discovery.source().display().to_string(),
+        diagnostics,
+    };
+    if args.json {
+        match serde_json::to_string_pretty(&output) {
+            Ok(json) => println!("{json}"),
+            Err(error) => {
+                eprintln!("error: cannot encode validation diagnostics as JSON: {error}");
+                return ExitCode::from(1);
+            }
+        }
+    } else if output.diagnostics.is_empty() {
+        println!(
+            "strict Agent Skills validation passed for {}",
+            output.source
+        );
+    } else {
+        println!("strict Agent Skills diagnostics for {}:", output.source);
+        for diagnostic in &output.diagnostics {
+            let level = match diagnostic.level {
+                DiagnosticLevel::Error => "error",
+                DiagnosticLevel::Warning => "warning",
+            };
+            if let Some(path) = &diagnostic.path {
+                println!("{level}: {path}: {}", diagnostic.message);
+            } else {
+                println!("{level}: {}", diagnostic.message);
+            }
+        }
+        if !discovery.has_errors() {
+            println!("normal discovery and installation remain non-blocking");
+        }
+    }
+    if discovery.has_errors() {
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
+fn run_completions(args: CompletionsArgs) -> ExitCode {
+    let mut command = Cli::command();
+    let mut stdout = io::stdout();
+    match args.shell.as_str() {
+        "bash" => generate(Bash, &mut command, "mise-skills", &mut stdout),
+        "zsh" => generate(Zsh, &mut command, "mise-skills", &mut stdout),
+        "fish" => generate(Fish, &mut command, "mise-skills", &mut stdout),
+        "powershell" => generate(PowerShell, &mut command, "mise-skills", &mut stdout),
+        _ => unreachable!("shell is constrained by clap"),
+    }
+    ExitCode::SUCCESS
 }
 
 fn run_use(args: UseArgs) -> ExitCode {

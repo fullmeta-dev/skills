@@ -289,6 +289,30 @@ impl Discovery {
         }
     }
 
+    /// Return non-blocking diagnostics for the strict Agent Skills format.
+    ///
+    /// `tags` is intentionally accepted by normal discovery as a portable
+    /// extension, so this check is kept separate from `has_errors` and never
+    /// changes installation or selection behavior.
+    pub fn strict_diagnostics(&self) -> Vec<Diagnostic> {
+        let mut diagnostics = Vec::new();
+        for skill in &self.candidates {
+            let path = self.source.join(&skill.path).join("SKILL.md");
+            diagnostics.extend(strict_skill_diagnostics(
+                &path,
+                &skill.path,
+                &skill.name,
+                &skill.description,
+            ));
+        }
+        diagnostics.sort_by(|left, right| {
+            left.path
+                .cmp(&right.path)
+                .then_with(|| left.message.cmp(&right.message))
+        });
+        diagnostics
+    }
+
     fn selector_candidates(&self, selector: &str) -> Vec<Skill> {
         if let Some(tag_expr) = selector.strip_prefix("tag:") {
             let tags = tag_expr.split('+').collect::<Vec<_>>();
@@ -917,6 +941,98 @@ fn parse_frontmatter(path: &Path) -> Result<(String, String, Vec<String>), Strin
     let description = required_string(frontmatter.description, "description")?;
     let tags = parse_tags(frontmatter.tags)?;
     Ok((name, description, tags))
+}
+
+fn strict_skill_diagnostics(
+    path: &Path,
+    relative_root: &str,
+    name: &str,
+    description: &str,
+) -> Vec<Diagnostic> {
+    let relative_file = if relative_root.is_empty() {
+        "SKILL.md".to_string()
+    } else {
+        format!("{relative_root}/SKILL.md")
+    };
+    let content = match fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(error) => {
+            return vec![Diagnostic::warning(
+                Some(relative_file),
+                format!("strict Agent Skills validation could not read file: {error}"),
+            )]
+        }
+    };
+    let mut lines = content.lines();
+    let first = lines
+        .next()
+        .unwrap_or_default()
+        .trim_start_matches('\u{feff}')
+        .trim();
+    if first != "---" {
+        return Vec::new();
+    }
+    let mut yaml = String::new();
+    let mut closed = false;
+    for line in lines {
+        if line.trim() == "---" || line.trim() == "..." {
+            closed = true;
+            break;
+        }
+        yaml.push_str(line);
+        yaml.push('\n');
+    }
+    if !closed {
+        return Vec::new();
+    }
+    let value = match serde_yaml::from_str::<serde_yaml::Value>(&yaml) {
+        Ok(value) => value,
+        Err(_) => return Vec::new(),
+    };
+    let Some(mapping) = value.as_mapping() else {
+        return Vec::new();
+    };
+    let mut diagnostics = Vec::new();
+    for key in mapping.keys() {
+        let Some(key) = key.as_str() else {
+            diagnostics.push(Diagnostic::warning(
+                Some(relative_file.clone()),
+                "strict Agent Skills validation found a non-string frontmatter key",
+            ));
+            continue;
+        };
+        if key == "tags" {
+            diagnostics.push(Diagnostic::warning(
+                Some(relative_file.clone()),
+                "strict Agent Skills validation: top-level `tags` is an intentional extension and is ignored by strict consumers",
+            ));
+        } else if key != "name" && key != "description" {
+            diagnostics.push(Diagnostic::warning(
+                Some(relative_file.clone()),
+                format!("strict Agent Skills validation: unsupported top-level field `{key}`"),
+            ));
+        }
+    }
+    let valid_name = (1..=64).contains(&name.len())
+        && !name.starts_with('-')
+        && !name.ends_with('-')
+        && !name.contains("--")
+        && name.chars().all(|character| {
+            character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
+        });
+    if !valid_name {
+        diagnostics.push(Diagnostic::warning(
+            Some(relative_file.clone()),
+            "strict Agent Skills validation: name must be 1-64 lowercase letters, numbers, or single hyphens",
+        ));
+    }
+    if description.len() > 1024 {
+        diagnostics.push(Diagnostic::warning(
+            Some(relative_file),
+            "strict Agent Skills validation: description exceeds 1024 characters",
+        ));
+    }
+    diagnostics
 }
 
 fn required_string(value: Option<serde_yaml::Value>, field: &str) -> Result<String, String> {

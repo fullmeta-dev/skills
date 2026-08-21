@@ -1,0 +1,335 @@
+#compdef mise-skills
+
+autoload -U is-at-least
+
+_mise-skills() {
+    typeset -A opt_args
+    typeset -a _arguments_options
+    local ret=1
+
+    if is-at-least 5.2; then
+        _arguments_options=(-s -S -C)
+    else
+        _arguments_options=(-s -C)
+    fi
+
+    local context curcontext="$curcontext" state line
+    _arguments "${_arguments_options[@]}" : \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+'-V[Print version]' \
+'--version[Print version]' \
+":: :_mise-skills_commands" \
+"*::: :->mise-skills" \
+&& ret=0
+    case $state in
+    (mise-skills)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:mise-skills-command-$line[1]:"
+        case $line[1] in
+            (list)
+_arguments "${_arguments_options[@]}" : \
+'--subpath=[Select a source subpath before applying catalog discovery]:SUBPATH:_files' \
+'*-i+[Include a selector. Repeated values are ORed]:INCLUDES:_default' \
+'*--include=[Include a selector. Repeated values are ORed]:INCLUDES:_default' \
+'*-e+[Exclude a selector. Exclusions always win]:EXCLUDES:_default' \
+'*--exclude=[Exclude a selector. Exclusions always win]:EXCLUDES:_default' \
+'--tree[Render every selected skill'\''s complete artifact tree]' \
+'--json[Emit stable machine-readable JSON]' \
+'--explain[Explain shadowing, selector decisions, and missing selectors]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':source -- Local checkout or snapshot directory. `path\:` is accepted as a prefix:_files' \
+'*::selectors -- Additional selectors, equivalent to repeated `--include`:_default' \
+&& ret=0
+;;
+(use)
+_arguments "${_arguments_options[@]}" : \
+'(--global)--path=[Edit this mise config file (or mise.toml inside a directory)]:PATH:_files' \
+'*--agent=[Agent adapters to record in the declaration]:AGENTS:_default' \
+'--subpath=[Source-relative skill directory, validated against traversal]:SUBPATH:_default' \
+'(--reference)--track=[Branch or tag to resolve. Defaults to the remote'\''s default branch]:TRACK:_default' \
+'(--track)--reference=[Explicit Git ref to resolve once]:REFERENCE:_default' \
+'(--path)--global[Edit the user-owned global mise config]' \
+'--locked[Do not resolve or rewrite an existing immutable version]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':source -- Source (`owner/repository`, `github\:...`, `git\:...`, or `path\:...`):_default' \
+'*::selectors -- Skills to include. An omitted list keeps an existing selection policy:_default' \
+&& ret=0
+;;
+(upgrade)
+_arguments "${_arguments_options[@]}" : \
+'(--global)--path=[Edit this mise config file (or mise.toml inside a directory)]:PATH:_files' \
+'(--path)--global[Edit the user-owned global mise config]' \
+'--locked[Do not resolve or rewrite any declared version]' \
+'-h[Print help]' \
+'--help[Print help]' \
+'*::tools -- Skill tool keys to refresh. With none, refresh every declaration:_default' \
+&& ret=0
+;;
+(sync)
+_arguments "${_arguments_options[@]}" : \
+'(--global)--path=[Edit this mise config file (or mise.toml inside a directory)]:PATH:_files' \
+'(--path)--global[Edit the user-owned global mise config]' \
+'--locked[Validate and converge using only already-declared immutable versions]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(status)
+_arguments "${_arguments_options[@]}" : \
+'(--global)--path=[Edit this mise config file (or mise.toml inside a directory)]:PATH:_files' \
+'(--path)--global[Edit the user-owned global mise config]' \
+'--json[Emit machine-readable status]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(remove)
+_arguments "${_arguments_options[@]}" : \
+'(--global)--path=[Edit this mise config file (or mise.toml inside a directory)]:PATH:_files' \
+'(--path)--global[Edit the user-owned global mise config]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':tool -- Skill tool key, with or without the `skills\:` prefix:_default' \
+'*::selectors -- Explicit include selectors to remove; omit to remove the whole tool:_default' \
+&& ret=0
+;;
+(prune)
+_arguments "${_arguments_options[@]}" : \
+'(--global)--path=[Edit this mise config file (or mise.toml inside a directory)]:PATH:_files' \
+'(--path)--global[Edit the user-owned global mise config]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(validate)
+_arguments "${_arguments_options[@]}" : \
+'--subpath=[Select a source subpath before validation]:SUBPATH:_files' \
+'--json[Emit stable machine-readable diagnostics]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':source -- Local checkout or snapshot directory. `path\:` is accepted as a prefix:_files' \
+&& ret=0
+;;
+(check)
+_arguments "${_arguments_options[@]}" : \
+'--subpath=[Select a source subpath before validation]:SUBPATH:_files' \
+'--json[Emit stable machine-readable diagnostics]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':source -- Local checkout or snapshot directory. `path\:` is accepted as a prefix:_files' \
+&& ret=0
+;;
+(completions)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+':shell -- Shell to generate\: bash, zsh, fish, or powershell:(bash zsh fish powershell)' \
+&& ret=0
+;;
+(completion)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+':shell -- Shell to generate\: bash, zsh, fish, or powershell:(bash zsh fish powershell)' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_mise-skills__subcmd__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:mise-skills-help-command-$line[1]:"
+        case $line[1] in
+            (list)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(use)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(upgrade)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(sync)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(status)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(remove)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(prune)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(validate)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(completions)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+}
+
+(( $+functions[_mise-skills_commands] )) ||
+_mise-skills_commands() {
+    local commands; commands=(
+'list:List discovered skills, optionally applying selectors' \
+'use:Declare a source and selected skills, resolving its immutable pin' \
+'upgrade:Refresh immutable pins for declared sources. This never installs or syncs' \
+'sync:Converge the selected configuration without following update tracks' \
+'status:Show declared skill sources and their link state' \
+'remove:Remove a declaration or selected entries from its include policy' \
+'prune:Remove stale links recorded for the selected configuration root' \
+'validate:Report strict Agent Skills conformance without blocking normal use' \
+'check:Report strict Agent Skills conformance without blocking normal use' \
+'completions:Generate a completion script for one supported shell' \
+'completion:Generate a completion script for one supported shell' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'mise-skills commands' commands "$@"
+}
+(( $+functions[_mise-skills__subcmd__completions_commands] )) ||
+_mise-skills__subcmd__completions_commands() {
+    local commands; commands=()
+    _describe -t commands 'mise-skills completions commands' commands "$@"
+}
+(( $+functions[_mise-skills__subcmd__help_commands] )) ||
+_mise-skills__subcmd__help_commands() {
+    local commands; commands=(
+'list:List discovered skills, optionally applying selectors' \
+'use:Declare a source and selected skills, resolving its immutable pin' \
+'upgrade:Refresh immutable pins for declared sources. This never installs or syncs' \
+'sync:Converge the selected configuration without following update tracks' \
+'status:Show declared skill sources and their link state' \
+'remove:Remove a declaration or selected entries from its include policy' \
+'prune:Remove stale links recorded for the selected configuration root' \
+'validate:Report strict Agent Skills conformance without blocking normal use' \
+'completions:Generate a completion script for one supported shell' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'mise-skills help commands' commands "$@"
+}
+(( $+functions[_mise-skills__subcmd__help__subcmd__completions_commands] )) ||
+_mise-skills__subcmd__help__subcmd__completions_commands() {
+    local commands; commands=()
+    _describe -t commands 'mise-skills help completions commands' commands "$@"
+}
+(( $+functions[_mise-skills__subcmd__help__subcmd__help_commands] )) ||
+_mise-skills__subcmd__help__subcmd__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'mise-skills help help commands' commands "$@"
+}
+(( $+functions[_mise-skills__subcmd__help__subcmd__list_commands] )) ||
+_mise-skills__subcmd__help__subcmd__list_commands() {
+    local commands; commands=()
+    _describe -t commands 'mise-skills help list commands' commands "$@"
+}
+(( $+functions[_mise-skills__subcmd__help__subcmd__prune_commands] )) ||
+_mise-skills__subcmd__help__subcmd__prune_commands() {
+    local commands; commands=()
+    _describe -t commands 'mise-skills help prune commands' commands "$@"
+}
+(( $+functions[_mise-skills__subcmd__help__subcmd__remove_commands] )) ||
+_mise-skills__subcmd__help__subcmd__remove_commands() {
+    local commands; commands=()
+    _describe -t commands 'mise-skills help remove commands' commands "$@"
+}
+(( $+functions[_mise-skills__subcmd__help__subcmd__status_commands] )) ||
+_mise-skills__subcmd__help__subcmd__status_commands() {
+    local commands; commands=()
+    _describe -t commands 'mise-skills help status commands' commands "$@"
+}
+(( $+functions[_mise-skills__subcmd__help__subcmd__sync_commands] )) ||
+_mise-skills__subcmd__help__subcmd__sync_commands() {
+    local commands; commands=()
+    _describe -t commands 'mise-skills help sync commands' commands "$@"
+}
+(( $+functions[_mise-skills__subcmd__help__subcmd__upgrade_commands] )) ||
+_mise-skills__subcmd__help__subcmd__upgrade_commands() {
+    local commands; commands=()
+    _describe -t commands 'mise-skills help upgrade commands' commands "$@"
+}
+(( $+functions[_mise-skills__subcmd__help__subcmd__use_commands] )) ||
+_mise-skills__subcmd__help__subcmd__use_commands() {
+    local commands; commands=()
+    _describe -t commands 'mise-skills help use commands' commands "$@"
+}
+(( $+functions[_mise-skills__subcmd__help__subcmd__validate_commands] )) ||
+_mise-skills__subcmd__help__subcmd__validate_commands() {
+    local commands; commands=()
+    _describe -t commands 'mise-skills help validate commands' commands "$@"
+}
+(( $+functions[_mise-skills__subcmd__list_commands] )) ||
+_mise-skills__subcmd__list_commands() {
+    local commands; commands=()
+    _describe -t commands 'mise-skills list commands' commands "$@"
+}
+(( $+functions[_mise-skills__subcmd__prune_commands] )) ||
+_mise-skills__subcmd__prune_commands() {
+    local commands; commands=()
+    _describe -t commands 'mise-skills prune commands' commands "$@"
+}
+(( $+functions[_mise-skills__subcmd__remove_commands] )) ||
+_mise-skills__subcmd__remove_commands() {
+    local commands; commands=()
+    _describe -t commands 'mise-skills remove commands' commands "$@"
+}
+(( $+functions[_mise-skills__subcmd__status_commands] )) ||
+_mise-skills__subcmd__status_commands() {
+    local commands; commands=()
+    _describe -t commands 'mise-skills status commands' commands "$@"
+}
+(( $+functions[_mise-skills__subcmd__sync_commands] )) ||
+_mise-skills__subcmd__sync_commands() {
+    local commands; commands=()
+    _describe -t commands 'mise-skills sync commands' commands "$@"
+}
+(( $+functions[_mise-skills__subcmd__upgrade_commands] )) ||
+_mise-skills__subcmd__upgrade_commands() {
+    local commands; commands=()
+    _describe -t commands 'mise-skills upgrade commands' commands "$@"
+}
+(( $+functions[_mise-skills__subcmd__use_commands] )) ||
+_mise-skills__subcmd__use_commands() {
+    local commands; commands=()
+    _describe -t commands 'mise-skills use commands' commands "$@"
+}
+(( $+functions[_mise-skills__subcmd__validate_commands] )) ||
+_mise-skills__subcmd__validate_commands() {
+    local commands; commands=()
+    _describe -t commands 'mise-skills validate commands' commands "$@"
+}
+
+if [ "$funcstack[1]" = "_mise-skills" ]; then
+    _mise-skills "$@"
+else
+    compdef _mise-skills mise-skills
+fi
