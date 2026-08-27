@@ -2,10 +2,13 @@
 python = "latest"
 uv = "latest"
 ruff = "latest"
+rust = "latest"
+watchexec = "latest"
 "pipx:pytest" = "latest"
 
 [env]
 _.python.venv = { path = ".venv", create = true }
+_.path = ["{{config_root}}/packages/skills/target/debug"]
 PYTHONPATH = "{{ config_root }}/mise/lib"
 
 # File tasks:

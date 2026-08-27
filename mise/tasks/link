@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+#MISE description="Link the working-tree skills backend into mise"
+
+#USAGE flag "-h --help" help="Print help"
+
+set -Eeuo pipefail
+
+if [[ "${usage_help:-false}" == "true" ]]; then
+    mise tasks info "${MISE_TASK_NAME:-link}"
+    exit 0
+fi
+
+repo_root="${MISE_PROJECT_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+printf 'link: pointing mise plugin skills at %s\n' "$repo_root"
+mise plugins link --force skills "$repo_root"
+cat <<'EOF'
+link: backend linked; no CLI build was performed.
+
+Next:
+  mise run build        # build the local CLI once
+  mise watch build      # rebuild it after Rust source changes
+
+The local CLI shadows the released CLI only inside this repository. To return
+mise's global backend plugin to the latest released compatible pair, run
+`skills self-update` outside this checkout after a release has been published.
+EOF

@@ -3,6 +3,25 @@
 `skills` manages Agent Skills as immutable mise tool snapshots. It is a
 normal mise-managed executable, not a task wrapper.
 
+## Local product development
+
+From this repository, build the local CLI and link mise's `skills` backend to
+the working tree:
+
+```sh
+mise run link
+mise run build
+mise watch build # optional Rust rebuild loop
+```
+
+The repository's mise environment prepends
+`packages/skills/target/debug` to `PATH`, so this checkout's debug CLI shadows
+a released global CLI only while working here. `link` intentionally does not
+build; it changes mise's global plugin link only. Lua/backend edits take effect
+immediately through that link. Once a release has been published, run
+`skills self-update` outside this checkout to restore mise's global plugin and
+CLI to the latest compatible released pair.
+
 ## Configuration and install
 
 Install the pinned backend plugin into mise's plugin data, then declare the

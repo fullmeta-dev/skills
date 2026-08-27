@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+#MISE description="Build the local skills CLI"
+#MISE sources=["packages/skills/Cargo.toml", "packages/skills/Cargo.lock", "packages/skills/src/**/*.rs"]
+#MISE outputs=["packages/skills/target/debug/skills"]
+
+#USAGE flag "-h --help" help="Print help"
+
+set -Eeuo pipefail
+
+if [[ "${usage_help:-false}" == "true" ]]; then
+    mise tasks info "${MISE_TASK_NAME:-build}"
+    exit 0
+fi
+
+repo_root="${MISE_PROJECT_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+printf 'build: compiling the local skills CLI\n'
+cargo build --manifest-path "$repo_root/packages/skills/Cargo.toml"
+printf 'build: %s\n' "$repo_root/packages/skills/target/debug/skills"

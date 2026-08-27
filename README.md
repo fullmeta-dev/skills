@@ -105,7 +105,25 @@ The concise reference is [`docs/mise-skills.md`](docs/mise-skills.md).
 ## Development
 
 The backend implementation is under `packages/skills-plugin`; the Rust CLI is under
-`packages/skills`:
+`packages/skills`.
+
+For local product development, link the working-tree backend once and build the
+local CLI. The repository mise configuration prepends the debug artifact to
+`PATH`, so it shadows a released global `skills` executable only while working
+in this checkout:
+
+```sh
+mise run link
+mise run build
+mise watch build # optional Rust rebuild loop
+```
+
+`mise run link` intentionally only links mise's global `skills` plugin; it does
+not build the CLI. Lua/backend edits are visible through that link immediately.
+After a release exists, return the global plugin and CLI to the latest compatible
+released pair by running `skills self-update` outside this checkout.
+
+Run the checks with:
 
 ```sh
 cargo test --manifest-path packages/skills/Cargo.toml
