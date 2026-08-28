@@ -11,10 +11,11 @@ use config::{Config, Scope};
 use serde::Serialize;
 use skills::{discover_with_subpath, DiagnosticLevel, Explain, Selection, Skill};
 use source::{
-    canonical_version, local_pin, resolve_git_pin, validate_subpath, SourceKind, SourceSpec,
+    canonical_version, local_pin, prepare_discovery_source, resolve_git_pin, validate_subpath,
+    SourceKind, SourceSpec,
 };
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command as ProcessCommand, ExitCode};
 
@@ -23,8 +24,8 @@ use std::process::{Command as ProcessCommand, ExitCode};
     name = "skills",
     version,
     about = "Discover and manage Agent Skills from immutable source snapshots",
-    long_about = "Discover and manage Agent Skills from immutable source snapshots. Choose a friendly source and selectors; skills resolves an immutable pin, while only upgrade follows an explicit track.",
-    after_help = "Normal behavior: list is read-only; use, upgrade, and remove edit the selected mise config; install, sync, and prune only touch links owned by that config root. Failures are reported on stderr with a non-zero exit status and leave unrelated files untouched.\n\nScope: project is the default; use --global, --path PATH, or --env ENV to select a config.\n\nExamples:\n  skills list path:../skills-source --json\n  skills use fullmeta-dev/skills code-review --agent pi\n  skills install\n  skills sync --locked\n  skills status --json\n  skills completions bash"
+    long_about = "Discover and manage Agent Skills from local directories and Git repositories, then install selected immutable snapshots through mise. Sources are local paths, GitHub owner/repository shorthands, github:owner/repository, or git URLs.\n\nRead-only discovery starts with `skills list SOURCE`: inspect names, descriptions, tags, aliases, files, and selector explanations before changing a config. `skills use SOURCE SELECTOR... --agent ADAPTER...` records the selection and immutable pin. `skills install` runs normal mise installation and activates links.\n\nOnly `skills upgrade` follows a branch or tag to a new source revision. `status`, `sync --locked`, `remove`, and `prune` manage existing project/global links without changing unrelated files.",
+    after_help = "Normal behavior: list is read-only; use and upgrade edit source declarations; install and sync converge immutable artifacts and owned links; remove and prune clean up only this config's ownership. Failures leave unrelated files and TOML untouched.\n\nLifecycle:\n  1. skills list github:owner/repo --json\n  2. skills use owner/repo skill-name --agent pi\n  3. skills install\n  4. skills status\n  5. skills upgrade && skills install\n\nAgents:\n  agents/codex/cursor -> .agents/skills (project) or ~/.agents/skills (global)\n  pi                  -> .pi/skills or ~/.pi/agent/skills\n  claude              -> .claude/skills or ~/.claude/skills\n\nScope:\n  project (default) -> mise.toml; --env NAME -> mise.NAME.toml\n  --path PATH       -> an explicit mise config; --global -> user config\n  Commit project/profile configs as normal mise files; keep mise.local.toml\n  or other local environment files uncommitted when appropriate.\n\nExamples:\n  skills list fullmeta-dev/skills --include tag:engineering --json\n  skills list git:https://github.com/org/repo.git --reference main --explain\n  skills use fullmeta-dev/skills mise --agent pi --agent claude\n  skills use --env development fullmeta-dev/skills mise --agent agents\n  skills install && skills status --json\n  skills remove skills:fullmeta-dev/skills mise\n  skills completions bash > ~/.local/share/bash-completion/completions/skills"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -35,12 +36,12 @@ struct Cli {
 enum Command {
     /// List discovered skills, optionally applying selectors.
     #[command(
-        after_help = "Normal: reads the local source and prints selected skills; missing selectors are warnings, not failures. Failure: malformed source data, unsafe links, or discovery errors return non-zero without editing files. Scope: source and optional --subpath only; no mise config is read. Example: skills list path:../skills-source --include tag:web --tree"
+        after_help = "Normal: read-only discovery. SOURCE accepts path:DIR, a local directory, owner/repository, github:owner/repository, or git/https/ssh/file URL. Remote sources are fetched at an immutable commit into a temporary checkout and deleted after listing. Use --track BRANCH_OR_TAG or --reference REF to choose the read-only revision; neither edits config. Output includes names, descriptions, tags, aliases, files, source, resolved revision, and selector explanations. Failure: malformed metadata, unsafe links, or unavailable refs return non-zero without editing files. Scope: source only; no config is read or changed. Example: skills list fullmeta-dev/skills --json --explain"
     )]
     List(ListArgs),
     /// Declare a source and selected skills, resolving its immutable pin.
     #[command(
-        after_help = "Normal: writes a source declaration, selectors, agents, and a direct postinstall sync hook to the selected mise config. Git sources resolve a full commit; local sources resolve a tree pin. Failure: invalid source, selector policy, agent, ref, or config leaves the file unchanged. Scope: project by default, or --global/--path/--env. Example: skills use fullmeta-dev/skills code-review --agent pi --agent claude"
+        after_help = "Normal: writes a source declaration, selectors, agents, and a direct postinstall sync hook to the selected mise config. SOURCE accepts path:DIR, a local directory, owner/repository, github:owner/repository, or git/https/ssh/file URL. Use `skills list SOURCE` first to inspect names, descriptions, tags, aliases, and files. Git sources resolve a full commit; local sources resolve a tree pin. Agents are agents/codex/cursor (.agents/skills), pi (.pi/skills), or claude (.claude/skills), with global equivalents. Failure: invalid source, selector policy, agent, ref, or config leaves the file unchanged. Scope: project by default, --global, --path PATH, or --env ENV. Example: skills use fullmeta-dev/skills mise --agent pi --agent claude"
     )]
     Use(UseArgs),
     /// Refresh immutable pins for declared sources. This never installs or syncs.
@@ -50,7 +51,7 @@ enum Command {
     Upgrade(UpgradeArgs),
     /// Install selected configuration tools through normal mise, then sync links.
     #[command(
-        after_help = "Normal: runs mise install against only the selected config and then directly runs locked sync. Failure: the selected config is left unchanged and unmanaged targets are untouched. Scope: project by default, or --global/--path/--env. Example: skills install --env development"
+        after_help = "Normal: runs normal mise install for every tool in the selected config (including non-skill tools), then directly runs locked sync to activate owned links. Failure: install or link errors are reported; unmanaged targets and unrelated TOML remain untouched. Scope: project by default, --global, --path PATH, or --env ENV. Example: skills install --env development"
     )]
     Install(InstallArgs),
     /// Update the CLI and its compatible backend as one safe pair.
@@ -71,12 +72,12 @@ enum Command {
     Sync(SyncArgs),
     /// Show declared skill sources and their link state.
     #[command(
-        after_help = "Normal: reports declarations, immutable versions, and active, missing, dangling, or conflicting links without changing files. Failure: invalid config data returns non-zero. Scope: project by default, or --global/--path/--env. Example: skills status --global --json"
+        after_help = "Normal: reports declarations, immutable versions, source selection, and active, missing, dangling, or conflicting links without changing files. Use it after `skills install` to confirm what is active. Failure: invalid config data returns non-zero. Scope: selected project/global/environment mise config. Example: skills status --global --json"
     )]
     Status(StatusArgs),
     /// Remove a declaration or selected entries from its include policy.
     #[command(
-        after_help = "Normal: removes selected includes or the whole declaration, syncs owned links, and delegates normal mise artifact removal only when unreferenced. Failure: unknown tools, selectors, or changed unmanaged links are reported without deleting unrelated targets. Scope: project by default, or --global/--path/--env. Example: skills remove skills:fullmeta-dev/skills code-review"
+        after_help = "Normal: removes selected includes or the whole declaration, syncs owned links, and delegates normal mise artifact removal only when unreferenced. Failure: unknown tools, selectors, or changed unmanaged links are reported without deleting unrelated targets. Scope: project by default, or --global/--path/--env. Example: skills remove skills:fullmeta-dev/skills mise"
     )]
     Remove(RemoveArgs),
     /// Remove stale links recorded for the selected configuration root.
@@ -133,8 +134,14 @@ impl ScopeArgs {
 
 #[derive(Debug, Args)]
 struct ListArgs {
-    /// Local checkout or snapshot directory. `path:` is accepted as a prefix.
-    source: PathBuf,
+    /// Local path, GitHub shorthand, or Git URL to inspect.
+    source: String,
+    /// Branch or tag to inspect without changing any config.
+    #[arg(long, conflicts_with = "reference")]
+    track: Option<String>,
+    /// Explicit Git ref or full commit to inspect without changing any config.
+    #[arg(long, conflicts_with = "track")]
+    reference: Option<String>,
     /// Select a source subpath before applying catalog discovery.
     #[arg(long)]
     subpath: Option<PathBuf>,
@@ -313,6 +320,11 @@ struct ValidateOutput {
 #[derive(Debug, Serialize)]
 struct ListOutput {
     source: String,
+    version: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    revision: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    track: Option<String>,
     catalog: skills::CatalogSummary,
     skills: Vec<Skill>,
     shadowed: Vec<skills::ShadowedSkill>,
@@ -371,8 +383,19 @@ fn main() -> ExitCode {
 }
 
 fn run_list(args: ListArgs) -> ExitCode {
-    let source = strip_path_prefix(&args.source);
-    let discovery = match discover_with_subpath(&source, args.subpath.as_deref()) {
+    let config_root = match std::env::current_dir() {
+        Ok(path) => path,
+        Err(error) => return fail(format!("cannot determine current directory: {error}")),
+    };
+    let prepared = match prepare_discovery_source(
+        &args.source,
+        &config_root,
+        args.reference.as_deref().or(args.track.as_deref()),
+    ) {
+        Ok(source) => source,
+        Err(error) => return fail(error),
+    };
+    let discovery = match discover_with_subpath(&prepared.root, args.subpath.as_deref()) {
         Ok(discovery) => discovery,
         Err(error) => {
             eprintln!("error: {error}");
@@ -384,7 +407,10 @@ fn run_list(args: ListArgs) -> ExitCode {
     let selection = discovery.select(&includes, &args.excludes);
     let explain = discovery.explain(&selection);
     let output = ListOutput {
-        source: discovery.source().display().to_string(),
+        source: prepared.spec.canonical.clone(),
+        version: prepared.version,
+        revision: prepared.revision,
+        track: prepared.track,
         catalog: discovery.catalog.clone(),
         skills: selection.selected.clone(),
         shadowed: discovery.shadowed.clone(),
@@ -409,14 +435,28 @@ fn run_list(args: ListArgs) -> ExitCode {
 
     if args.json {
         match serde_json::to_string_pretty(&output) {
-            Ok(json) => println!("{json}"),
+            Ok(json) => {
+                if let Err(error) = write_stdout(&(json + "\n")) {
+                    return if error.kind() == io::ErrorKind::BrokenPipe {
+                        ExitCode::SUCCESS
+                    } else {
+                        eprintln!("error: cannot write list output: {error}");
+                        ExitCode::from(1)
+                    };
+                }
+            }
             Err(error) => {
                 eprintln!("error: cannot encode list as JSON: {error}");
                 return ExitCode::from(1);
             }
         }
-    } else {
-        print_text(&output, &selection, args.tree, args.explain);
+    } else if let Err(error) = print_text(&output, &selection, args.tree, args.explain) {
+        return if error.kind() == io::ErrorKind::BrokenPipe {
+            ExitCode::SUCCESS
+        } else {
+            eprintln!("error: cannot write list output: {error}");
+            ExitCode::from(1)
+        };
     }
 
     if discovery.has_errors() {
@@ -1370,60 +1410,137 @@ fn strip_path_prefix(path: &Path) -> PathBuf {
         .unwrap_or_else(|| path.to_path_buf())
 }
 
-fn print_text(output: &ListOutput, selection: &Selection, tree: bool, explain: bool) {
+fn write_stdout(value: &str) -> io::Result<()> {
+    let mut stdout = io::stdout().lock();
+    stdout.write_all(value.as_bytes())?;
+    stdout.flush()
+}
+
+/// Render untrusted source metadata without allowing terminal control sequences.
+fn terminal_text(value: &str) -> String {
+    value
+        .chars()
+        .flat_map(|character| character.escape_default())
+        .collect()
+}
+
+fn print_text(
+    output: &ListOutput,
+    selection: &Selection,
+    tree: bool,
+    explain: bool,
+) -> io::Result<()> {
+    let mut text = String::new();
+    use std::fmt::Write as _;
+    writeln!(text, "Source: {}", terminal_text(&output.source))
+        .expect("writing String cannot fail");
+    writeln!(text, "Version: {}", terminal_text(&output.version))
+        .expect("writing String cannot fail");
+    if let Some(revision) = &output.revision {
+        writeln!(text, "Revision: {}", terminal_text(revision))
+            .expect("writing String cannot fail");
+    }
+    if let Some(track) = &output.track {
+        writeln!(text, "Track: {}", terminal_text(track)).expect("writing String cannot fail");
+    }
+    writeln!(text).expect("writing String cannot fail");
     for skill in &output.skills {
         let tags = if skill.tags.is_empty() {
-            String::new()
+            "none".to_string()
         } else {
-            format!(" [{}]", skill.tags.join(", "))
+            skill.tags.join(", ")
         };
-        println!("{}\t{}{}", skill.path, skill.name, tags);
+        let aliases = if skill.aliases.is_empty() {
+            "none".to_string()
+        } else {
+            skill.aliases.join(", ")
+        };
+        writeln!(
+            text,
+            "{}  {}",
+            terminal_text(&skill.name),
+            terminal_text(&skill.path)
+        )
+        .expect("writing String cannot fail");
+        writeln!(text, "  Description: {}", terminal_text(&skill.description))
+            .expect("writing String cannot fail");
+        writeln!(text, "  Tags: {}", terminal_text(&tags)).expect("writing String cannot fail");
+        writeln!(text, "  Aliases: {}", terminal_text(&aliases))
+            .expect("writing String cannot fail");
         if tree {
             for file in &skill.files {
-                println!("  {file}");
+                writeln!(text, "  File: {}", terminal_text(file))
+                    .expect("writing String cannot fail");
             }
         }
     }
     if explain {
-        println!();
-        println!("Explanation:");
+        writeln!(text, "\nExplanation:").expect("writing String cannot fail");
         if output.shadowed.is_empty() {
-            println!("  Shadowed: none");
+            writeln!(text, "  Shadowed: none").expect("writing String cannot fail");
         } else {
-            println!("  Shadowed:");
+            writeln!(text, "  Shadowed:").expect("writing String cannot fail");
             for shadow in &output.shadowed {
-                println!(
+                writeln!(
+                    text,
                     "    {}: {} wins over {}",
-                    shadow.name, shadow.winner, shadow.path
-                );
+                    terminal_text(&shadow.name),
+                    terminal_text(&shadow.winner),
+                    terminal_text(&shadow.path)
+                )
+                .expect("writing String cannot fail");
             }
         }
         for decision in &selection.decisions {
-            println!("  {}: {}", decision.path, decision.reason);
+            writeln!(
+                text,
+                "  {}: {}",
+                terminal_text(&decision.path),
+                terminal_text(&decision.reason)
+            )
+            .expect("writing String cannot fail");
         }
         for selector in &selection.missing_includes {
-            println!("  missing include selector: {selector}");
+            writeln!(
+                text,
+                "  missing include selector: {}",
+                terminal_text(selector)
+            )
+            .expect("writing String cannot fail");
         }
         for resolution in &selection.selector_resolutions {
-            println!(
+            writeln!(
+                text,
                 "  {}: {} wins over {}",
-                resolution.selector,
-                resolution.winner,
-                resolution.shadowed.join(", ")
-            );
+                terminal_text(&resolution.selector),
+                terminal_text(&resolution.winner),
+                terminal_text(&resolution.shadowed.join(", "))
+            )
+            .expect("writing String cannot fail");
         }
         for selector in &selection.missing_excludes {
-            println!("  missing exclude selector: {selector}");
+            writeln!(
+                text,
+                "  missing exclude selector: {}",
+                terminal_text(selector)
+            )
+            .expect("writing String cannot fail");
         }
     }
     for selector in &selection.missing_includes {
         if !explain {
-            eprintln!("warning: missing include selector: {selector}");
+            eprintln!(
+                "warning: missing include selector: {}",
+                terminal_text(selector)
+            );
         }
     }
     for selector in &selection.missing_excludes {
         if !explain {
-            eprintln!("warning: missing exclude selector: {selector}");
+            eprintln!(
+                "warning: missing exclude selector: {}",
+                terminal_text(selector)
+            );
         }
     }
     for diagnostic in &output.diagnostics {
@@ -1432,17 +1549,31 @@ fn print_text(output: &ListOutput, selection: &Selection, tree: bool, explain: b
             DiagnosticLevel::Warning => "warning",
         };
         if let Some(path) = &diagnostic.path {
-            eprintln!("{level}: {path}: {}", diagnostic.message);
+            eprintln!(
+                "{level}: {}: {}",
+                terminal_text(path),
+                terminal_text(&diagnostic.message)
+            );
         } else {
-            eprintln!("{level}: {}", diagnostic.message);
+            eprintln!("{level}: {}", terminal_text(&diagnostic.message));
         }
     }
+    write_stdout(&text)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn terminal_text_escapes_untrusted_controls() {
+        assert_eq!(
+            terminal_text("safe\u{1b}]52;c;payload\u{7}"),
+            "safe\\u{1b}]52;c;payload\\u{7}"
+        );
+        assert_eq!(terminal_text("line\nbreak"), "line\\nbreak");
+    }
 
     #[test]
     fn strips_only_the_explicit_path_prefix() {

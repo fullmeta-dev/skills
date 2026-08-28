@@ -25,14 +25,21 @@ bin = "skills"
 ```
 
 Mise shell activation is required for the global binary to be on `PATH`. Then
-install it through normal mise and select skills in a project:
+install it through normal mise and select skills in a project. Browse a source
+first; `list` is read-only and shows names, descriptions, tags, aliases, files,
+and selector decisions:
 
 ```sh
-mise install
-skills use fullmeta-dev/skills code-review --agent pi
+skills list fullmeta-dev/skills --json --explain
+skills use fullmeta-dev/skills mise --agent pi
 skills install
 skills status
 ```
+
+`list` also accepts `path:DIR`, local directories, `github:owner/repository`,
+and Git URLs (`https://`, `ssh://`, or `file://`). Remote sources are fetched
+at an immutable revision into a temporary checkout. Use `--track BRANCH_OR_TAG`
+or `--reference REF` to preview a particular revision without editing config.
 
 If `skills` is not the expected executable, compare `mise which skills` and
 `command -v skills`. `skills doctor --global` reports a foreign executable;
@@ -45,9 +52,24 @@ config, then runs a locked link sync. The generated postinstall hook is the
 direct command `skills sync --locked`.
 
 Use `--global`, `--path PATH`, and `--env ENV` to select the intended mise
-configuration. The effective config is never inferred from an arbitrary tool
-argument. `agents` is the shared Codex/Cursor target; `pi` and `claude` use
-their native locations.
+configuration. Project selections belong in `mise.toml`; environment-specific
+profiles use `mise.<env>.toml`, while local-only choices can use
+`mise.local.toml` or `mise.<env>.local.toml` (normally gitignored). The effective config is never inferred
+from an arbitrary tool argument. `agents`, `codex`, and `cursor` use
+`.agents/skills` (or `~/.agents/skills` globally); `pi` and `claude` use their
+native locations. See the illustrative generated-style config at
+[`examples/skills-project.mise.toml`](examples/skills-project.mise.toml). For
+other normal mise config scopes:
+
+```sh
+skills use --global fullmeta-dev/skills mise --agent agents
+skills use --env development fullmeta-dev/skills mise --agent pi
+skills use --path mise.local.toml fullmeta-dev/skills mise --agent pi
+```
+
+A source repository may add `.mise/skills.toml` to declare discovery roots,
+tags, aliases, and exclusions; this repository does so to publish only
+`skills/` and keep implementation/tests out of its catalog.
 
 ## Updates and removal
 
@@ -85,7 +107,7 @@ skills install --accept-collision
 Remove policy and owned links without touching unrelated targets:
 
 ```sh
-skills remove skills:fullmeta-dev/skills code-review
+skills remove skills:fullmeta-dev/skills mise
 skills remove skills:fullmeta-dev/skills
 skills prune
 ```

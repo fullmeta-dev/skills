@@ -7,3 +7,5 @@ __pycache__/
 /tmp/
 *.sqlite
 *.sqlite-*
+mise.local.toml
+mise.*.local.toml

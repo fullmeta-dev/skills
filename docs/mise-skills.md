@@ -40,13 +40,29 @@ bin = "skills"
 ```
 
 Mise shell activation is required for the global binary to be on `PATH`.
-Then run:
+Then browse a source before selecting anything. `list` is read-only and
+prints each skill's name, description, tags, aliases, artifact files, source,
+revision, and selector decisions:
 
 ```sh
-mise install
+skills list fullmeta-dev/skills --json --explain
+skills list path:../my-skills --include tag:web
 skills use SOURCE SELECTOR... --agent AGENT...
 skills install
+skills status --json
 ```
+
+`list` accepts the same source grammar as `use`: a local `path:DIR` or
+ordinary directory, `owner/repository`, `github:owner/repository`, or a
+`git:`/`https:`/`ssh:`/`file:` URL. Git sources are fetched at a resolved full
+commit in a temporary checkout and removed after the read-only operation. Use
+`--track BRANCH_OR_TAG` or `--reference REF` to preview a particular revision.
+Selectors can be names, aliases, `tag:name`, or repository-relative globs;
+use `--explain` to see matching, shadowing, and missing-selector decisions.
+A source repository can publish a focused catalog with `.mise/skills.toml`:
+set `[discovery].roots`, `[discovery].exclude`, `[tags]`, and `[aliases]`.
+The catalog is read-only metadata for discovery; `skills use` still records the
+immutable source snapshot in the selected mise config.
 
 Use `mise which skills` and `command -v skills` to diagnose PATH collisions.
 `skills doctor --global` reports a foreign executable; remediation is an
@@ -61,12 +77,24 @@ not merged into project ownership manifests.
 Commands default to the nearest project `mise.toml`. `--env development`
 writes/reads `mise.development.toml`, matching mise's environment-specific
 configuration. A global environment uses `config.<env>.toml` below the mise
-config directory. Diagnostics print the effective config path and environment.
+config directory. Use `--path PATH` for an explicit file or directory. Commit
+project/profile configs as ordinary mise files; use the normal uncommitted
+`mise.local.toml` or `mise.<env>.local.toml` for machine-specific choices.
+
+```sh
+skills use --global fullmeta-dev/skills mise --agent agents
+skills use --env development fullmeta-dev/skills mise --agent pi
+skills use --path mise.local.toml fullmeta-dev/skills mise --agent pi
+```
+
+Diagnostics print the effective config path and environment.
 
 ## Commands
 
 ```text
 skills list SOURCE [SELECTORS...]
+# SOURCE may be path:DIR, owner/repository, github:owner/repository, or git URL
+# Add --track REF / --reference REF for a read-only remote preview
 skills use [--global|--path PATH|--env ENV] SOURCE [SELECTORS...] --agent AGENT...
 skills install [--global|--path PATH|--env ENV] [--locked] [--dry-run]
 skills sync [--global|--path PATH|--env ENV] [--locked]
@@ -77,6 +105,10 @@ skills remove [--global|--path PATH|--env ENV] TOOL [SELECTORS...]
 skills prune [--global|--path PATH|--env ENV]
 skills doctor [--global|--path PATH|--env ENV]
 ```
+
+`list` never edits a config. Its JSON/text output includes `source`, immutable
+`version`, remote `revision` and `track` when applicable, and each skill's
+`name`, `description`, `tags`, `aliases`, and artifact `files`.
 
 `use` edits only the selected config and resolves an immutable `rev:<commit>`
 for Git sources or `tree-<sha256>` for local sources. `track` records update

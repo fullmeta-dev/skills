@@ -93,6 +93,10 @@ run_backend() {
 
 source_root="$WORK_DIR/local-source"
 cp -a "$FIXTURE_DIR" "$source_root"
+# Developer/runtime artifacts must not affect the immutable local tree pin.
+mkdir -p "$source_root/.venv/bin" "$source_root/target/debug"
+printf '%s\n' developer-state > "$source_root/.venv/bin/python"
+printf '%s\n' build-state > "$source_root/target/debug/ignored"
 config_root="$WORK_DIR/config-root"
 mkdir -p "$config_root"
 local_bad="tree-0000000000000000000000000000000000000000000000000000000000000000"

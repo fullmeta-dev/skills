@@ -87,7 +87,18 @@ fn exclusion_wins_and_missing_selectors_are_diagnostics_not_errors() {
 #[test]
 fn approved_implementation_directories_are_skipped() {
     let temp = TempDir::new().expect("temporary source");
-    for directory in [".git", "node_modules", "dist", "build", "__pycache__"] {
+    for directory in [
+        ".git",
+        ".venv",
+        ".direnv",
+        "target",
+        "node_modules",
+        "dist",
+        "build",
+        "__pycache__",
+        ".mise-skills-manifest.json",
+        ".skills-backend",
+    ] {
         let root = temp.path().join(directory).join("hidden");
         fs::create_dir_all(&root).unwrap();
         fs::write(
@@ -102,7 +113,29 @@ fn approved_implementation_directories_are_skipped() {
 
 #[test]
 fn malformed_yaml_invalid_tags_and_escaping_links_are_reported() {
-    let result = discover(fixture("discovery-invalid")).expect("fixture source");
+    let temp = TempDir::new().expect("temporary source");
+    let malformed = temp.path().join("malformed");
+    let invalid_tags = temp.path().join("invalid-tags");
+    let unsafe_skill = temp.path().join("unsafe");
+    fs::create_dir_all(&malformed).unwrap();
+    fs::create_dir_all(&invalid_tags).unwrap();
+    fs::create_dir_all(&unsafe_skill).unwrap();
+    fs::write(malformed.join("SKILL.md"), "---\nname: [broken\n---\n").unwrap();
+    fs::write(
+        invalid_tags.join("SKILL.md"),
+        "---\nname: invalid\ndescription: invalid\ntags: [UpperCase]\n---\n",
+    )
+    .unwrap();
+    fs::write(
+        unsafe_skill.join("SKILL.md"),
+        "---\nname: unsafe\ndescription: unsafe\n---\n",
+    )
+    .unwrap();
+    let outside = temp.path().join("outside.md");
+    fs::write(&outside, "outside").unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&outside, unsafe_skill.join("outside.md")).unwrap();
+    let result = discover(temp.path()).expect("fixture source");
     assert!(result.skills.is_empty());
     assert!(result.has_errors());
     let messages = result

@@ -43,6 +43,8 @@ Register-ArgumentCompleter -Native -CommandName 'skills' -ScriptBlock {
             break
         }
         'skills;list' {
+            [CompletionResult]::new('--track', '--track', [CompletionResultType]::ParameterName, 'Branch or tag to inspect without changing any config')
+            [CompletionResult]::new('--reference', '--reference', [CompletionResultType]::ParameterName, 'Explicit Git ref or full commit to inspect without changing any config')
             [CompletionResult]::new('--subpath', '--subpath', [CompletionResultType]::ParameterName, 'Select a source subpath before applying catalog discovery')
             [CompletionResult]::new('-i', '-i', [CompletionResultType]::ParameterName, 'Include a selector. Repeated values are ORed')
             [CompletionResult]::new('--include', '--include', [CompletionResultType]::ParameterName, 'Include a selector. Repeated values are ORed')

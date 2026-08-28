@@ -41,6 +41,8 @@ complete -c skills -n "__fish_skills_needs_command" -f -a "check" -d 'Report str
 complete -c skills -n "__fish_skills_needs_command" -f -a "completions" -d 'Generate a completion script for one supported shell'
 complete -c skills -n "__fish_skills_needs_command" -f -a "completion" -d 'Generate a completion script for one supported shell'
 complete -c skills -n "__fish_skills_needs_command" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
+complete -c skills -n "__fish_skills_using_subcommand list" -l track -d 'Branch or tag to inspect without changing any config' -r
+complete -c skills -n "__fish_skills_using_subcommand list" -l reference -d 'Explicit Git ref or full commit to inspect without changing any config' -r
 complete -c skills -n "__fish_skills_using_subcommand list" -l subpath -d 'Select a source subpath before applying catalog discovery' -r -F
 complete -c skills -n "__fish_skills_using_subcommand list" -s i -l include -d 'Include a selector. Repeated values are ORed' -r
 complete -c skills -n "__fish_skills_using_subcommand list" -s e -l exclude -d 'Exclude a selector. Exclusions always win' -r

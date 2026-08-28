@@ -12,7 +12,20 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 use walkdir::WalkDir;
 
-const SKIPPED_DIRECTORIES: &[&str] = &[".git", "node_modules", "dist", "build", "__pycache__"];
+// Keep this list aligned with source.rs and the vfox backend. These
+// directories are developer/runtime state, not publishable skill content.
+const SKIPPED_DIRECTORIES: &[&str] = &[
+    ".git",
+    ".venv",
+    ".direnv",
+    "target",
+    "node_modules",
+    "dist",
+    "build",
+    "__pycache__",
+    ".mise-skills-manifest.json",
+    ".skills-backend",
+];
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -68,6 +81,8 @@ pub struct Skill {
     pub name: String,
     pub description: String,
     pub tags: Vec<String>,
+    /// Catalog aliases that resolve to this skill, in lexical order.
+    pub aliases: Vec<String>,
     /// Every file and symlink in this skill directory, relative to `path`.
     /// Entries are sorted lexically and are intentionally included in list
     /// output so consumers can materialize the complete artifact.
@@ -857,10 +872,17 @@ fn parse_skill(
     let files = artifact_files(skill_root)
         .map_err(|message| Diagnostic::error(Some(relative_root.clone()), message))?;
     Ok(Skill {
-        path: relative_root,
+        path: relative_root.clone(),
         name,
         description,
         tags: tags.into_iter().collect(),
+        aliases: catalog
+            .summary
+            .aliases
+            .iter()
+            .filter(|(_, path)| *path == &relative_root)
+            .map(|(alias, _)| alias.clone())
+            .collect(),
         files,
     })
 }

@@ -6,6 +6,9 @@ local backend = {}
 -- Keep this list aligned with source.rs' local tree digest exclusions.
 local TREE_DIGEST_EXCLUDED_DIRECTORIES = {
     ".git",
+    ".venv",
+    ".direnv",
+    "target",
     "node_modules",
     "dist",
     "build",

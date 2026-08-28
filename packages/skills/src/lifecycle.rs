@@ -1065,16 +1065,9 @@ fn artifact_skill_paths(path: &Path) -> Result<BTreeSet<String>, String> {
         .into_iter()
         .filter_entry(|entry| {
             entry.depth() == 0
-                || !matches!(
-                    entry.file_name().to_str(),
-                    Some(".git")
-                        | Some("node_modules")
-                        | Some("dist")
-                        | Some("build")
-                        | Some("__pycache__")
-                        | Some(".mise-skills-manifest.json")
-                        | Some(".skills-backend")
-                )
+                || !crate::source::TREE_DIGEST_EXCLUDED_DIRECTORIES
+                    .iter()
+                    .any(|name| entry.file_name().to_str() == Some(*name))
         });
     for entry in walker {
         let entry = entry.map_err(|error| format!("cannot inspect artifact inventory: {error}"))?;

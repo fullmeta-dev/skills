@@ -93,9 +93,49 @@ fn use_edits_project_and_explicit_paths_without_damaging_hooks() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(fs::read_to_string(explicit)
+    assert!(fs::read_to_string(&explicit)
         .unwrap()
         .contains("[tools.\"skills:local/project-source\"]"));
+
+    let local = project.join("mise.local.toml");
+    let output = run(
+        &project,
+        &[
+            "use",
+            "--path",
+            local.to_str().unwrap(),
+            &source_arg,
+            "project-source",
+            "--agent",
+            "pi",
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(local.is_file());
+
+    let profile = project.join("mise.development.toml");
+    let output = run(
+        &project,
+        &[
+            "use",
+            "--env",
+            "development",
+            &source_arg,
+            "project-source",
+            "--agent",
+            "claude",
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(profile.is_file());
 
     let global_dir = temp.path().join("global");
     fs::create_dir(&global_dir).unwrap();

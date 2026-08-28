@@ -375,12 +375,20 @@ _skills() {
             return 0
             ;;
         skills__subcmd__list)
-            opts="-i -e -h --subpath --include --exclude --tree --json --explain --help"
+            opts="-i -e -h --track --reference --subpath --include --exclude --tree --json --explain --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --track)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --reference)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 --subpath)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0

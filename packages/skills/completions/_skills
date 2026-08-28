@@ -30,6 +30,8 @@ _skills() {
         case $line[1] in
             (list)
 _arguments "${_arguments_options[@]}" : \
+'(--reference)--track=[Branch or tag to inspect without changing any config]:TRACK:_default' \
+'(--track)--reference=[Explicit Git ref or full commit to inspect without changing any config]:REFERENCE:_default' \
 '--subpath=[Select a source subpath before applying catalog discovery]:SUBPATH:_files' \
 '*-i+[Include a selector. Repeated values are ORed]:INCLUDES:_default' \
 '*--include=[Include a selector. Repeated values are ORed]:INCLUDES:_default' \
@@ -40,7 +42,7 @@ _arguments "${_arguments_options[@]}" : \
 '--explain[Explain shadowing, selector decisions, and missing selectors]' \
 '-h[Print help]' \
 '--help[Print help]' \
-':source -- Local checkout or snapshot directory. `path\:` is accepted as a prefix:_files' \
+':source -- Local path, GitHub shorthand, or Git URL to inspect:_default' \
 '*::selectors -- Additional selectors, equivalent to repeated `--include`:_default' \
 && ret=0
 ;;

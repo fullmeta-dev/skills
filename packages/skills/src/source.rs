@@ -3,10 +3,14 @@ use std::ffi::OsStr;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
+use tempfile::TempDir;
 use walkdir::WalkDir;
 
 pub(crate) const TREE_DIGEST_EXCLUDED_DIRECTORIES: &[&str] = &[
     ".git",
+    ".venv",
+    ".direnv",
+    "target",
     "node_modules",
     "dist",
     "build",
@@ -14,6 +18,17 @@ pub(crate) const TREE_DIGEST_EXCLUDED_DIRECTORIES: &[&str] = &[
     ".mise-skills-manifest.json",
     ".skills-backend",
 ];
+
+/// A source checkout prepared for read-only discovery. Remote checkouts are
+/// deleted when this value is dropped; local paths borrow no temporary state.
+pub struct DiscoverySource {
+    pub spec: SourceSpec,
+    pub root: PathBuf,
+    pub version: String,
+    pub track: Option<String>,
+    pub revision: Option<String>,
+    _temporary: Option<TempDir>,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceKind {
@@ -172,6 +187,63 @@ impl SourceSpec {
             SourceKind::Path => unreachable!("local sources do not have a Git URL"),
         }
     }
+}
+
+/// Resolve a source for read-only discovery. Unlike `skills use`, this does
+/// not write a config or an install artifact. Remote sources are fetched at a
+/// full commit into a disposable checkout, so listing a branch never exposes
+/// a moving working tree to discovery.
+pub fn prepare_discovery_source(
+    input: &str,
+    config_root: &Path,
+    reference: Option<&str>,
+) -> Result<DiscoverySource, String> {
+    let spec = SourceSpec::parse(input, config_root)?;
+    if spec.kind == SourceKind::Path {
+        if reference.is_some() {
+            return Err("--track/--reference can only be used with Git sources".into());
+        }
+        let root = spec
+            .resolved_path
+            .clone()
+            .ok_or_else(|| "local source path is unavailable".to_string())?;
+        return Ok(DiscoverySource {
+            version: local_pin(&spec, "")?,
+            spec,
+            root,
+            track: None,
+            revision: None,
+            _temporary: None,
+        });
+    }
+
+    let pin = resolve_git_pin(&spec, reference)?;
+    let revision = pin
+        .version
+        .strip_prefix("rev:")
+        .ok_or_else(|| "Git source did not resolve to an immutable revision".to_string())?
+        .to_string();
+    let temporary =
+        TempDir::new().map_err(|error| format!("cannot create source checkout: {error}"))?;
+    run_git_in(temporary.path(), &["init", "--quiet"])?;
+    run_git_in(temporary.path(), &["remote", "add", "origin", &spec.url()])?;
+    run_git_in(
+        temporary.path(),
+        &["fetch", "--quiet", "--depth", "1", "origin", &revision],
+    )?;
+    run_git_in(
+        temporary.path(),
+        &["checkout", "--quiet", "--detach", "FETCH_HEAD"],
+    )?;
+    let root = temporary.path().to_path_buf();
+    Ok(DiscoverySource {
+        version: pin.version,
+        spec,
+        root,
+        track: Some(pin.track),
+        revision: Some(revision),
+        _temporary: Some(temporary),
+    })
 }
 
 pub fn validate_subpath(value: Option<&str>) -> Result<String, String> {
@@ -432,8 +504,20 @@ fn should_skip(path: &Path) -> bool {
 }
 
 fn run_git(args: &[&str]) -> Result<String, String> {
-    let output = Command::new("git")
-        .args(args)
+    run_git_in_impl(None, args)
+}
+
+fn run_git_in(directory: &Path, args: &[&str]) -> Result<String, String> {
+    run_git_in_impl(Some(directory), args)
+}
+
+fn run_git_in_impl(directory: Option<&Path>, args: &[&str]) -> Result<String, String> {
+    let mut command = Command::new("git");
+    command.args(args);
+    if let Some(directory) = directory {
+        command.current_dir(directory);
+    }
+    let output = command
         .output()
         .map_err(|error| format!("cannot run git: {error}"))?;
     if !output.status.success() {
@@ -619,6 +703,15 @@ mod tests {
     fn local_digest_changes_with_content_but_ignores_backend_exclusions() {
         let temp = TempDir::new().unwrap();
         fs::write(temp.path().join("skill.txt"), "one").unwrap();
+        let external = TempDir::new().unwrap();
+        fs::write(external.path().join("outside"), "developer state").unwrap();
+        fs::create_dir_all(temp.path().join(".venv/bin")).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(
+            external.path().join("outside"),
+            temp.path().join(".venv/bin/python"),
+        )
+        .unwrap();
         let source =
             SourceSpec::parse(&format!("path:{}", temp.path().display()), temp.path()).unwrap();
         let first = local_pin(&source, "").unwrap();

@@ -1,0 +1,17 @@
+# Illustrative generated-style config for a project using skills.
+#
+# Do not copy this file unchanged: replace the placeholder `version` by
+# running `skills use` for your selected source. Keep the
+# resulting mise.toml under version control when the project should share its
+# skill selection; use mise.local.toml or an environment config for local-only
+# choices.
+
+[tools."skills:fullmeta-dev/skills"]
+source = "github:fullmeta-dev/skills"
+version = "rev:<resolved-40-character-commit>"
+track = "main"
+include = ["mise"]
+agents = ["pi", "agents"]
+
+[hooks]
+postinstall = ["skills sync --locked"]

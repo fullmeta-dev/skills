@@ -22,7 +22,15 @@ fn documented_commands_have_scope_failure_and_example_help() {
     let top = run(temp.path(), &["--help"]);
     assert!(top.status.success());
     let top_text = String::from_utf8_lossy(&top.stdout);
-    for phrase in ["Normal behavior:", "Scope:", "Examples:", "completions"] {
+    for phrase in [
+        "Normal behavior:",
+        "Scope:",
+        "Examples:",
+        "Lifecycle:",
+        "Agents:",
+        "descriptions",
+        "completions",
+    ] {
         assert!(top_text.contains(phrase), "top-level help missing {phrase}");
     }
 
@@ -49,6 +57,12 @@ fn documented_commands_have_scope_failure_and_example_help() {
                 "{command} help missing {phrase}: {text}"
             );
         }
+    }
+
+    let list = run(temp.path(), &["list", "--help"]);
+    let list_text = String::from_utf8_lossy(&list.stdout);
+    for phrase in ["temporary checkout", "immutable", "aliases", "--reference"] {
+        assert!(list_text.contains(phrase), "list help missing {phrase}");
     }
 }
 
