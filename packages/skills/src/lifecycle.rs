@@ -1120,6 +1120,9 @@ fn find_artifact(key: &str, version: &str) -> Result<Option<Artifact>, String> {
     );
     let mut candidates = Vec::new();
     candidates.push(installs.join(&tool_name).join(version));
+    // mise stores a Git version containing `:` as a filesystem-safe `-`,
+    // e.g. the declared `rev:<commit>` becomes `rev-<commit>`.
+    candidates.push(installs.join(&tool_name).join(version.replace(':', "-")));
     if let Some(raw) = version.strip_prefix("rev:") {
         candidates.push(installs.join(&tool_name).join(raw));
     }

@@ -620,7 +620,7 @@ fn same_revision_subpaths_use_one_complete_artifact_without_cross_activation() {
     let artifact = data
         .join("installs")
         .join("skills-local-repository")
-        .join(&revision);
+        .join(format!("rev-{revision}"));
     copy_directory(&repository, &artifact);
     write_manifest(
         &artifact,
