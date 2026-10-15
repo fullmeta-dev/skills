@@ -28,6 +28,14 @@ This repository uses a single-context layout. See `docs/agents/domain.md`.
 - Use `mise` for toolchains/env/tasks
 - Use `pitchfork` to start processes in reproducible manner e.g. watch and recompile.
 
+## Test fixtures
+
+Committed `SKILL.md` files under `tests/` are internal: set
+`metadata.internal: true` so recursive scanners (`npx skills add
+--full-depth`, used by `npx skills update`) skip them. Generate intentionally
+invalid frontmatter in a `TempDir` inside the test instead of committing it.
+See `tests/fixtures/README.md`.
+
 ## Git commit rules
 - ASCII-only message.
 - Subject line: short, imperative, no trailing period.
