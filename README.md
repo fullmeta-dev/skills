@@ -86,7 +86,9 @@ its own config rather than the project mise happens to run it in.
 Use `--global`, `--path PATH`, and `--env ENV` to select the intended mise
 configuration. Project selections belong in `mise.toml`; environment-specific
 profiles use `mise.<env>.toml`, while local-only choices can use
-`mise.local.toml` or `mise.<env>.local.toml` (normally gitignored). The effective config is never inferred
+`mise.local.toml` or `mise.<env>.local.toml` (normally gitignored). Only an
+explicit `--env` selects an environment file: an ambient `MISE_ENV` never
+retargets `--global` or `--path`. The effective config is never inferred
 from an arbitrary tool argument. `agents`, `codex`, and `cursor` use
 `.agents/skills` (or `~/.agents/skills` globally); `pi` and `claude` use their
 native locations. Generated links point into mise's installs and are

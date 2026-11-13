@@ -105,8 +105,10 @@ Agents (project -> global):
 Scope:
   Config commands default to the nearest ancestor mise.toml, or ./mise.toml.
   --global selects the user config (~/.config/mise/config.toml by default).
-  --path PATH selects a file, or mise.toml inside a directory.
-  --env ENV (or MISE_ENV) inserts .ENV before the extension:
+  --path PATH selects a file, or mise.toml inside a directory. An explicit
+  --path always uses the given file; an ambient MISE_ENV never retargets
+  --global or --path.
+  --env ENV inserts .ENV before the extension:
   mise.toml -> mise.development.toml, config.toml -> config.development.toml.
   --global and --path are mutually exclusive; --env combines with either.
   self-update defaults to global. --path alone does not select global agent
@@ -208,7 +210,7 @@ enum Command {
     /// Update the CLI and its compatible backend as one safe pair.
     #[command(
         name = "self-update",
-        after_help = "Normal: discovers the latest release's release-compatibility.json asset, checks minimum mise and executable ownership, installs the CLI, updates the installed skills backend plugin, then saves the selected config only after both succeed. Requires an existing [tools.\"github:fullmeta-dev/skills\"] table with version and bin = \"skills\"; this is not a bootstrap command. Default scope is global; --version must name an entry in the compatibility manifest. --dry-run still inspects the release and manifest but installs and edits nothing. Failure: returns non-zero and retains the old config; backend restoration is attempted and rollback failures are reported. Set SKILLS_RELEASE_API or SKILLS_COMPATIBILITY_MANIFEST to local JSON fixtures for offline runs. Example: skills self-update --dry-run"
+        after_help = "Normal: discovers the latest release's release-compatibility.json asset, checks minimum mise and executable ownership, installs the CLI, updates the installed skills backend plugin, then saves the selected config only after both succeed. Requires an existing [tools.\"github:fullmeta-dev/skills\"] table or inline table with version and bin = \"skills\"; this is not a bootstrap command. The plugin keeps the URL it is already installed from (for example SSH) and only its revision changes; a mise shim on PATH for this tool is not a collision. Default scope is global; --version must name an entry in the compatibility manifest. --dry-run still inspects the release and manifest but installs and edits nothing. Failure: returns non-zero and retains the old config; backend restoration is attempted and rollback failures are reported. Set SKILLS_RELEASE_API or SKILLS_COMPATIBILITY_MANIFEST to local JSON fixtures for offline runs. Example: skills self-update --dry-run"
     )]
     SelfUpdate(SelfUpdateArgs),
     /// Diagnose executable collisions and selected mise ownership.
@@ -258,7 +260,7 @@ enum Command {
 #[derive(Debug, Args)]
 struct ScopeArgs {
     /// Select mise's environment-specific config (`mise.<env>.toml`).
-    #[arg(long, env = "MISE_ENV", value_name = "ENV")]
+    #[arg(long, value_name = "ENV")]
     env: Option<String>,
     /// Select the user-owned global mise config.
     #[arg(long, conflicts_with = "path")]
@@ -270,9 +272,14 @@ struct ScopeArgs {
 
 impl ScopeArgs {
     fn scope(&self) -> Scope {
-        if let Some(environment) = &self.env {
-            config::validate_environment_name(environment).expect("clap validates environment");
-            std::env::set_var("MISE_ENV", environment);
+        match &self.env {
+            Some(environment) => {
+                config::validate_environment_name(environment).expect("clap validates environment");
+                std::env::set_var("MISE_ENV", environment);
+            }
+            // An ambient MISE_ENV must not silently retarget --global or
+            // --path; only an explicit --env selects an environment file.
+            None => std::env::remove_var("MISE_ENV"),
         }
         if self.global {
             Scope::Global
@@ -439,15 +446,18 @@ struct SelfUpdateScopeArgs {
     #[arg(long, value_name = "PATH", conflicts_with = "global")]
     path: Option<PathBuf>,
     /// Select an environment-specific config.
-    #[arg(long, env = "MISE_ENV", value_name = "ENV")]
+    #[arg(long, value_name = "ENV")]
     env: Option<String>,
 }
 
 impl SelfUpdateScopeArgs {
     fn scope(&self) -> Scope {
-        if let Some(environment) = &self.env {
-            config::validate_environment_name(environment).expect("clap validates environment");
-            std::env::set_var("MISE_ENV", environment);
+        match &self.env {
+            Some(environment) => {
+                config::validate_environment_name(environment).expect("clap validates environment");
+                std::env::set_var("MISE_ENV", environment);
+            }
+            None => std::env::remove_var("MISE_ENV"),
         }
         self.path.clone().map(Scope::Path).unwrap_or(Scope::Global)
     }
@@ -1156,17 +1166,18 @@ fn self_update_command(args: SelfUpdateArgs) -> Result<(String, PathBuf, bool), 
     let cli = tools
         .get(cli_key)
         .ok_or_else(|| format!("selected config does not declare {cli_key:?}"))?;
-    if cli.as_str().is_some() {
-        return Err(format!(
-            "CLI declaration {cli_key:?} must be a table with bin = \\\"skills\\\""
-        ));
-    }
-    let cli_table = cli
+    let bin = cli
         .as_table()
-        .ok_or_else(|| format!("CLI declaration {cli_key:?} must be a table"))?;
-    if cli_table.get("bin").and_then(toml_edit::Item::as_str) != Some("skills") {
+        .and_then(|table| table.get("bin"))
+        .and_then(toml_edit::Item::as_str)
+        .or_else(|| {
+            cli.as_inline_table()
+                .and_then(|table| table.get("bin"))
+                .and_then(toml_edit::Value::as_str)
+        });
+    if bin != Some("skills") {
         return Err(format!(
-            "CLI declaration {cli_key:?} must expose bin = \\\"skills\\\""
+            "CLI declaration {cli_key:?} must be a table with bin = \"skills\""
         ));
     }
     // The backend is installed in mise's plugin data, not necessarily
@@ -1174,15 +1185,24 @@ fn self_update_command(args: SelfUpdateArgs) -> Result<(String, PathBuf, bool), 
     // changing it so a failed pair update can restore the exact old plugin.
     let old_plugin = inspect_installed_plugin()?;
 
-    let collisions = collision_diagnostics(&config);
+    let collisions: Vec<String> = collision_diagnostics(&config)
+        .into_iter()
+        .filter(|collision| !is_mise_shim_collision(collision))
+        .collect();
     if !collisions.is_empty() {
         return Err(format!(
-            "refusing self-update due to executable collision:\\n{}",
-            collisions.join("\\n")
+            "refusing self-update due to executable collision:\n{}",
+            collisions.join("\n")
         ));
     }
 
-    let new_plugin = format!("{}#{}", release.plugin_url, release.plugin_revision);
+    // Keep the transport the user already installed (for example SSH) instead
+    // of silently switching the backend plugin to the manifest's HTTPS URL.
+    let new_plugin = format!(
+        "{}#{}",
+        preferred_plugin_url(old_plugin.as_deref(), &release.plugin_url),
+        release.plugin_revision
+    );
     if args.dry_run {
         println!("would install CLI github:fullmeta-dev/skills@{version} through mise");
         println!("would install backend plugin skills from {new_plugin}");
@@ -1427,6 +1447,62 @@ fn restore_installed_plugin(pin: Option<&str>) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// A `PATH owner` that is a mise shim is the expected way a mise-managed CLI
+/// appears on PATH, not a foreign collision.
+fn is_mise_shim_collision(collision: &str) -> bool {
+    let Some(path) = collision.strip_prefix("PATH owner: ") else {
+        return false;
+    };
+    Path::new(path)
+        .parent()
+        .and_then(|parent| parent.file_name())
+        .is_some_and(|name| name == "shims")
+}
+
+/// Prefer the URL the plugin is already installed from, so self-update keeps
+/// the user's transport (for example SSH) and only changes the revision. Fall
+/// back to the manifest URL when nothing is installed or the repositories
+/// differ.
+fn preferred_plugin_url(installed: Option<&str>, manifest_url: &str) -> String {
+    let Some(installed) = installed else {
+        return manifest_url.to_string();
+    };
+    let Some((url, _)) = installed.rsplit_once('#') else {
+        return manifest_url.to_string();
+    };
+    if url.is_empty() || url.starts_with('-') || !same_repository(url, manifest_url) {
+        return manifest_url.to_string();
+    }
+    url.to_string()
+}
+
+fn same_repository(left: &str, right: &str) -> bool {
+    fn tail(value: &str) -> String {
+        let without_scheme = value
+            .split_once("://")
+            .map(|(_, rest)| rest)
+            .unwrap_or(value);
+        let normalized = without_scheme
+            .trim_end_matches('/')
+            .trim_end_matches(".git")
+            .replace(':', "/");
+        let parts: Vec<&str> = normalized
+            .split('/')
+            .filter(|part| !part.is_empty())
+            .collect();
+        parts
+            .iter()
+            .rev()
+            .take(2)
+            .rev()
+            .map(|part| part.to_string())
+            .collect::<Vec<_>>()
+            .join("/")
+    }
+    let left = tail(left);
+    !left.is_empty() && left == tail(right)
 }
 
 fn install_plugin_pin(pin: &str) -> Result<(), String> {
@@ -2103,5 +2179,44 @@ mod tests {
             "safe\\u{1b}]52;c;payload\\u{7}"
         );
         assert_eq!(terminal_text("line\nbreak"), "line\\nbreak");
+    }
+
+    #[test]
+    fn mise_shims_are_not_self_update_collisions() {
+        assert!(is_mise_shim_collision(
+            "PATH owner: /home/u/.local/share/mise/shims/skills"
+        ));
+        assert!(!is_mise_shim_collision("PATH owner: /usr/local/bin/skills"));
+        assert!(!is_mise_shim_collision(
+            "mise owner: /data/installs/x/skills"
+        ));
+    }
+
+    #[test]
+    fn self_update_keeps_the_installed_plugin_transport() {
+        let manifest = "https://github.com/fullmeta-dev/skills.git";
+        assert_eq!(
+            preferred_plugin_url(Some("git@github.com:fullmeta-dev/skills.git#abc"), manifest),
+            "git@github.com:fullmeta-dev/skills.git"
+        );
+        assert_eq!(
+            preferred_plugin_url(
+                Some("ssh://git@github.com/fullmeta-dev/skills.git#abc"),
+                manifest
+            ),
+            "ssh://git@github.com/fullmeta-dev/skills.git"
+        );
+        assert_eq!(
+            preferred_plugin_url(
+                Some("https://github.com/fullmeta-dev/skills.git#abc"),
+                manifest
+            ),
+            manifest
+        );
+        assert_eq!(
+            preferred_plugin_url(Some("git@github.com:other/repo.git#abc"), manifest),
+            manifest
+        );
+        assert_eq!(preferred_plugin_url(None, manifest), manifest);
     }
 }

@@ -1734,3 +1734,103 @@ fn forced_replacement_is_rolled_back_when_sync_fails() {
         "foreign"
     );
 }
+
+#[test]
+fn ambient_mise_env_does_not_retarget_explicit_scope() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path().join("home");
+    let data = temp.path().join("data");
+    let state = temp.path().join("state");
+    let project = temp.path().join("project");
+    let source = temp.path().join("source");
+    for directory in [&home, &data, &state, &project, &source] {
+        fs::create_dir_all(directory).unwrap();
+    }
+    skill(&source, "demo");
+    let config = project.join("mise.toml");
+    let envs = [
+        ("HOME", home.as_path()),
+        ("MISE_DATA_DIR", data.as_path()),
+        ("MISE_STATE_DIR", state.as_path()),
+    ];
+    let output = run(
+        &project,
+        &[
+            "use",
+            "--path",
+            config.to_str().unwrap(),
+            &format!("path:{}", source.display()),
+            "demo",
+            "--agent",
+            "pi",
+        ],
+        &envs,
+    );
+    assert!(output.status.success());
+
+    // An ambient MISE_ENV must not make --path read mise.<env>.toml.
+    let output = run_with(
+        &project,
+        &["status", "--path", config.to_str().unwrap(), "--json"],
+        &envs,
+        &[("MISE_ENV", "tailscale")],
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("skills:local/source"),
+        "an ambient MISE_ENV retargeted --path: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+
+    // An explicit --env still selects the environment-specific file.
+    let output = run_with(
+        &project,
+        &[
+            "status",
+            "--path",
+            config.to_str().unwrap(),
+            "--env",
+            "dev",
+            "--json",
+        ],
+        &envs,
+        &[("MISE_ENV", "tailscale")],
+    );
+    assert!(output.status.success());
+    assert!(
+        !String::from_utf8_lossy(&output.stdout).contains("skills:local/source"),
+        "an explicit --env must select mise.dev.toml"
+    );
+
+    // The same holds for --global: an ambient MISE_ENV must not redirect it to
+    // config.<env>.toml, which is not where global declarations live.
+    let output = run(
+        &project,
+        &[
+            "use",
+            "--global",
+            &format!("path:{}", source.display()),
+            "demo",
+            "--agent",
+            "pi",
+        ],
+        &envs,
+    );
+    assert!(output.status.success());
+    let output = run_with(
+        &project,
+        &["status", "--global", "--json"],
+        &envs,
+        &[("MISE_ENV", "tailscale")],
+    );
+    assert!(output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("skills:local/source"),
+        "an ambient MISE_ENV retargeted --global: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}

@@ -92,7 +92,9 @@ because mise runs the hook with the current project directory as its cwd.
 Commands default to the nearest project `mise.toml`. `--env development`
 writes/reads `mise.development.toml`, matching mise's environment-specific
 configuration. A global environment uses `config.<env>.toml` below the mise
-config directory. Use `--path PATH` for an explicit file or directory. Commit
+config directory. Use `--path PATH` for an explicit file or directory. Only an
+explicit `--env` selects an environment file: an ambient `MISE_ENV` is ignored,
+so it never silently retargets `--global` or `--path`. Commit
 project/profile configs as ordinary mise files; use the normal uncommitted
 `mise.local.toml` or `mise.<env>.local.toml` for machine-specific choices.
 
@@ -135,7 +137,11 @@ records the remote default branch, so `skills upgrade` followed by
 postinstall, and sync never follow tracks. `self-update` queries the latest GitHub release,
 then consumes that release's immutable `release-compatibility.json` asset. It
 inspects the installed backend in mise's plugin data and updates the CLI/backend
-pair only after the new CLI is installed. A failed self-update leaves the old
+pair only after the new CLI is installed. It accepts both a
+`[tools."github:fullmeta-dev/skills"]` table and an inline-table declaration,
+and keeps the plugin URL it is already installed from (for example SSH),
+changing only the revision. A mise shim on `PATH` for this tool is not treated
+as a collision. A failed self-update leaves the old
 declaration usable and does not add or rewrite a plugin declaration in the
 selected config. Set `SKILLS_RELEASE_API` to a local API JSON fixture or
 `SKILLS_COMPATIBILITY_MANIFEST` to a local manifest for deterministic,

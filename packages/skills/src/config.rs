@@ -449,17 +449,30 @@ pub fn update_cli_release(document: &mut DocumentMut, version: &str) -> Result<(
         .get_mut("tools")
         .and_then(Item::as_table_mut)
         .ok_or_else(|| "config has no [tools] table".to_string())?;
-    let table = tools
+    let item = tools
         .get_mut("github:fullmeta-dev/skills")
-        .and_then(Item::as_table_mut)
-        .ok_or_else(|| "config has no github:fullmeta-dev/skills CLI table".to_string())?;
-    if table.get("bin").and_then(Item::as_str) != Some("skills") {
-        return Err("github:fullmeta-dev/skills must expose bin = \\\"skills\\\"".into());
+        .ok_or_else(|| "config has no github:fullmeta-dev/skills CLI declaration".to_string())?;
+    match item {
+        Item::Table(table) => {
+            if table.get("bin").and_then(Item::as_str) != Some("skills") {
+                return Err("github:fullmeta-dev/skills must expose bin = \"skills\"".into());
+            }
+            if !table.contains_key("version") {
+                return Err("github:fullmeta-dev/skills has no version".into());
+            }
+            replace_string(table, "version", version);
+        }
+        Item::Value(Value::InlineTable(table)) => {
+            if table.get("bin").and_then(Value::as_str) != Some("skills") {
+                return Err("github:fullmeta-dev/skills must expose bin = \"skills\"".into());
+            }
+            if !table.contains_key("version") {
+                return Err("github:fullmeta-dev/skills has no version".into());
+            }
+            table.insert("version", Value::from(version));
+        }
+        _ => return Err("github:fullmeta-dev/skills must be a table with bin = \"skills\"".into()),
     }
-    if !table.contains_key("version") {
-        return Err("github:fullmeta-dev/skills has no version".into());
-    }
-    replace_string(table, "version", version);
     Ok(())
 }
 
@@ -900,5 +913,14 @@ mod tests {
             false,
         )
         .is_err());
+    }
+
+    #[test]
+    fn updates_an_inline_table_cli_release() {
+        let mut document = doc(
+            "[tools]\n\"github:fullmeta-dev/skills\" = { version = \"0.1.0\", bin = \"skills\" }\n",
+        );
+        update_cli_release(&mut document, "0.2.0").unwrap();
+        assert!(document.to_string().contains("version = \"0.2.0\""));
     }
 }
