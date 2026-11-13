@@ -106,8 +106,8 @@ Scope:
   Config commands default to the nearest ancestor mise.toml, or ./mise.toml.
   --global selects the user config (~/.config/mise/config.toml by default).
   --path PATH selects a file, or mise.toml inside a directory. An explicit
-  --path always uses the given file; an ambient MISE_ENV never retargets
-  --global or --path.
+  --path always uses the given file unless an explicit --env is also given;
+  an ambient MISE_ENV never retargets --global or --path.
   --env ENV inserts .ENV before the extension:
   mise.toml -> mise.development.toml, config.toml -> config.development.toml.
   --global and --path are mutually exclusive; --env combines with either.
@@ -1205,7 +1205,10 @@ fn self_update_command(args: SelfUpdateArgs) -> Result<(String, PathBuf, bool), 
     );
     if args.dry_run {
         println!("would install CLI github:fullmeta-dev/skills@{version} through mise");
-        println!("would install backend plugin skills from {new_plugin}");
+        println!(
+            "would install backend plugin skills from {}",
+            terminal_text(&new_plugin)
+        );
         println!("would update only {}", config.path.display());
         return Ok((version, config.path, true));
     }
@@ -1449,22 +1452,42 @@ fn restore_installed_plugin(pin: Option<&str>) -> Result<(), String> {
     Ok(())
 }
 
-/// A `PATH owner` that is a mise shim is the expected way a mise-managed CLI
-/// appears on PATH, not a foreign collision.
+/// A mise shim is a symlink to the mise binary; that is the expected way a
+/// mise-managed CLI appears on PATH, not a foreign collision. The resolved
+/// target is compared, so a shim directory under any name is recognized and a
+/// same-named foreign binary is not.
 fn is_mise_shim_collision(collision: &str) -> bool {
     let Some(path) = collision.strip_prefix("PATH owner: ") else {
         return false;
     };
-    Path::new(path)
-        .parent()
-        .and_then(|parent| parent.file_name())
-        .is_some_and(|name| name == "shims")
+    let Ok(resolved) = fs::canonicalize(path) else {
+        return false;
+    };
+    if resolved.file_stem().and_then(|stem| stem.to_str()) != Some("mise") {
+        return false;
+    }
+    match mise_binary_path() {
+        Some(mise) => fs::canonicalize(mise).is_ok_and(|mise| mise == resolved),
+        None => true,
+    }
+}
+
+fn mise_binary_path() -> Option<PathBuf> {
+    if let Some(value) = std::env::var_os("MISE_BIN") {
+        if !value.is_empty() {
+            return Some(PathBuf::from(value));
+        }
+    }
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|directory| directory.join("mise"))
+        .find(|candidate| candidate.is_file())
 }
 
 /// Prefer the URL the plugin is already installed from, so self-update keeps
 /// the user's transport (for example SSH) and only changes the revision. Fall
-/// back to the manifest URL when nothing is installed or the repositories
-/// differ.
+/// back to the manifest URL when nothing is installed, the URL is unsafe, or
+/// the repositories differ.
 fn preferred_plugin_url(installed: Option<&str>, manifest_url: &str) -> String {
     let Some(installed) = installed else {
         return manifest_url.to_string();
@@ -1472,37 +1495,51 @@ fn preferred_plugin_url(installed: Option<&str>, manifest_url: &str) -> String {
     let Some((url, _)) = installed.rsplit_once('#') else {
         return manifest_url.to_string();
     };
-    if url.is_empty() || url.starts_with('-') || !same_repository(url, manifest_url) {
+    if !same_repository(url, manifest_url) {
         return manifest_url.to_string();
     }
     url.to_string()
 }
 
-fn same_repository(left: &str, right: &str) -> bool {
-    fn tail(value: &str) -> String {
-        let without_scheme = value
-            .split_once("://")
-            .map(|(_, rest)| rest)
-            .unwrap_or(value);
-        let normalized = without_scheme
-            .trim_end_matches('/')
-            .trim_end_matches(".git")
-            .replace(':', "/");
-        let parts: Vec<&str> = normalized
-            .split('/')
-            .filter(|part| !part.is_empty())
-            .collect();
-        parts
-            .iter()
-            .rev()
-            .take(2)
-            .rev()
-            .map(|part| part.to_string())
-            .collect::<Vec<_>>()
-            .join("/")
+/// Reduce a Git URL to `(host, repository path)` so transports for the same
+/// repository match while a different host or path never does.
+fn repository_identity(value: &str) -> Option<(String, String)> {
+    let value = value.trim();
+    if value.is_empty()
+        || value.starts_with('-')
+        || value
+            .chars()
+            .any(|character| character.is_whitespace() || character.is_control())
+    {
+        return None;
     }
-    let left = tail(left);
-    !left.is_empty() && left == tail(right)
+    let (host, path) = if let Some((_, rest)) = value.split_once("://") {
+        let rest = rest.split_once('@').map(|(_, rest)| rest).unwrap_or(rest);
+        rest.split_once('/')?
+    } else if let Some((host, path)) = value.split_once(':') {
+        (
+            host.split_once('@').map(|(_, host)| host).unwrap_or(host),
+            path,
+        )
+    } else {
+        return None;
+    };
+    let path = path
+        .trim_start_matches('/')
+        .trim_end_matches('/')
+        .trim_end_matches(".git")
+        .trim_end_matches('/');
+    if host.is_empty() || path.is_empty() {
+        return None;
+    }
+    Some((host.to_ascii_lowercase(), path.to_string()))
+}
+
+fn same_repository(left: &str, right: &str) -> bool {
+    match (repository_identity(left), repository_identity(right)) {
+        (Some(left), Some(right)) => left == right,
+        _ => false,
+    }
 }
 
 fn install_plugin_pin(pin: &str) -> Result<(), String> {
@@ -2183,40 +2220,62 @@ mod tests {
 
     #[test]
     fn mise_shims_are_not_self_update_collisions() {
-        assert!(is_mise_shim_collision(
-            "PATH owner: /home/u/.local/share/mise/shims/skills"
-        ));
-        assert!(!is_mise_shim_collision("PATH owner: /usr/local/bin/skills"));
+        let temp = tempfile::TempDir::new().unwrap();
+        let mise = temp.path().join("mise");
+        fs::write(&mise, b"binary").unwrap();
+        let shim_dir = temp.path().join("bin");
+        fs::create_dir_all(&shim_dir).unwrap();
+        let shim = shim_dir.join("skills");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&mise, &shim).unwrap();
+        #[cfg(not(unix))]
+        fs::copy(&mise, &shim).unwrap();
+        let previous = std::env::var_os("MISE_BIN");
+        std::env::set_var("MISE_BIN", &mise);
+        #[cfg(unix)]
+        assert!(is_mise_shim_collision(&format!(
+            "PATH owner: {}",
+            shim.display()
+        )));
+        assert!(!is_mise_shim_collision(&format!(
+            "PATH owner: {}",
+            temp.path().join("foreign").display()
+        )));
         assert!(!is_mise_shim_collision(
             "mise owner: /data/installs/x/skills"
         ));
+        match previous {
+            Some(value) => std::env::set_var("MISE_BIN", value),
+            None => std::env::remove_var("MISE_BIN"),
+        }
     }
 
     #[test]
     fn self_update_keeps_the_installed_plugin_transport() {
         let manifest = "https://github.com/fullmeta-dev/skills.git";
-        assert_eq!(
-            preferred_plugin_url(Some("git@github.com:fullmeta-dev/skills.git#abc"), manifest),
-            "git@github.com:fullmeta-dev/skills.git"
-        );
-        assert_eq!(
-            preferred_plugin_url(
-                Some("ssh://git@github.com/fullmeta-dev/skills.git#abc"),
-                manifest
-            ),
-            "ssh://git@github.com/fullmeta-dev/skills.git"
-        );
-        assert_eq!(
-            preferred_plugin_url(
-                Some("https://github.com/fullmeta-dev/skills.git#abc"),
-                manifest
-            ),
-            manifest
-        );
-        assert_eq!(
-            preferred_plugin_url(Some("git@github.com:other/repo.git#abc"), manifest),
-            manifest
-        );
+        for installed in [
+            "git@github.com:fullmeta-dev/skills.git",
+            "ssh://git@github.com/fullmeta-dev/skills.git",
+            "https://github.com/fullmeta-dev/skills/",
+        ] {
+            assert_eq!(
+                preferred_plugin_url(Some(&format!("{installed}#abc")), manifest),
+                installed,
+                "{installed}"
+            );
+        }
+        for installed in [
+            "git@evil.example:fullmeta-dev/skills.git",
+            "https://gitlab.com/other/fullmeta-dev/skills.git",
+            "git@github.com:other/repo.git",
+            "https://github.com/fullmeta-dev/skills.git\u{7}",
+        ] {
+            assert_eq!(
+                preferred_plugin_url(Some(&format!("{installed}#abc")), manifest),
+                manifest,
+                "{installed}"
+            );
+        }
         assert_eq!(preferred_plugin_url(None, manifest), manifest);
     }
 }

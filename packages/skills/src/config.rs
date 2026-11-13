@@ -469,7 +469,9 @@ pub fn update_cli_release(document: &mut DocumentMut, version: &str) -> Result<(
             if !table.contains_key("version") {
                 return Err("github:fullmeta-dev/skills has no version".into());
             }
-            table.insert("version", Value::from(version));
+            if let Some(value) = table.get_mut("version") {
+                *value = Value::from(version);
+            }
         }
         _ => return Err("github:fullmeta-dev/skills must be a table with bin = \"skills\"".into()),
     }

@@ -1748,12 +1748,16 @@ fn ambient_mise_env_does_not_retarget_explicit_scope() {
     }
     skill(&source, "demo");
     let config = project.join("mise.toml");
+    let global_config = temp.path().join("global-config.toml");
     let envs = [
         ("HOME", home.as_path()),
         ("MISE_DATA_DIR", data.as_path()),
         ("MISE_STATE_DIR", state.as_path()),
+        ("MISE_CONFIG_FILE", global_config.as_path()),
     ];
-    let output = run(
+    // Build the fixture with an explicitly empty environment so the test does
+    // not depend on the developer's ambient MISE_ENV.
+    let output = run_with(
         &project,
         &[
             "use",
@@ -1765,6 +1769,7 @@ fn ambient_mise_env_does_not_retarget_explicit_scope() {
             "pi",
         ],
         &envs,
+        &[("MISE_ENV", "")],
     );
     assert!(output.status.success());
 
@@ -1808,7 +1813,7 @@ fn ambient_mise_env_does_not_retarget_explicit_scope() {
 
     // The same holds for --global: an ambient MISE_ENV must not redirect it to
     // config.<env>.toml, which is not where global declarations live.
-    let output = run(
+    let output = run_with(
         &project,
         &[
             "use",
@@ -1819,8 +1824,13 @@ fn ambient_mise_env_does_not_retarget_explicit_scope() {
             "pi",
         ],
         &envs,
+        &[("MISE_ENV", "")],
     );
-    assert!(output.status.success());
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let output = run_with(
         &project,
         &["status", "--global", "--json"],
