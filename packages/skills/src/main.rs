@@ -150,6 +150,9 @@ Diagnostics:
   self-update installs the latest compatible CLI/backend pair; --dry-run still
   inspects the release and compatibility manifest. Set SKILLS_RELEASE_API or
   SKILLS_COMPATIBILITY_MANIFEST to local JSON fixtures for offline runs.
+  A malformed skill outside the selection fails activation unless the
+  declaration sets allow_source_errors = true (skills use
+  --allow-source-errors); source-wide errors always fail.
 
 Caching (list):
   Remote sources are fetched at an immutable commit. Checkouts are cached
@@ -241,7 +244,7 @@ enum Command {
     /// Report strict Agent Skills conformance without blocking normal use.
     #[command(
         visible_alias = "check",
-        after_help = "Normal: checks local sources for strict Agent Skills conformance without blocking normal discovery. SOURCE is required and must be a local directory (an optional path: prefix is accepted); GitHub shorthand and Git URLs are not fetched. Relative paths use the working directory. The intentional top-level tags extension is reported but does not fail ordinary discovery. Exit 0 means ordinary discovery succeeded even when strict-only diagnostics exist. --json emits source and diagnostics. Failure: unreadable sources or ordinary discovery errors return non-zero. Alias: check. Example: skills validate path:../skills-source --json"
+        after_help = "Normal: checks a source for strict Agent Skills conformance without blocking normal discovery. SOURCE accepts the same grammar as list: a local directory, path:DIR, owner/repository, github:owner/repository, or a git URL. Remote sources are fetched (and cached) at an immutable revision. The intentional top-level tags extension is reported but does not fail ordinary discovery. Exit 0 means ordinary discovery succeeded even when strict-only diagnostics exist. --json emits source and diagnostics. Failure: unreadable sources or ordinary discovery errors return non-zero. Alias: check. Example: skills validate path:../skills-source --json"
     )]
     Validate(ValidateArgs),
     /// Generate a completion script for one supported shell.
@@ -380,6 +383,9 @@ struct UseArgs {
     /// Do not resolve or rewrite an existing immutable version.
     #[arg(long)]
     locked: bool,
+    /// Tolerate malformed skill files outside the selection; source-wide errors still fail.
+    #[arg(long)]
+    allow_source_errors: bool,
 }
 
 #[derive(Debug, Args)]
@@ -502,8 +508,8 @@ struct CacheArgs {
 
 #[derive(Debug, Args)]
 struct ValidateArgs {
-    /// Local checkout or snapshot directory. `path:` is accepted as a prefix.
-    source: PathBuf,
+    /// Source to validate: local directory, `path:DIR`, GitHub shorthand, or Git URL.
+    source: String,
     /// Select a source subpath before validation.
     #[arg(long)]
     subpath: Option<PathBuf>,
@@ -749,8 +755,16 @@ fn run_list(args: ListArgs) -> ExitCode {
 }
 
 fn run_validate(args: ValidateArgs) -> ExitCode {
-    let source = strip_path_prefix(&args.source);
-    let discovery = match discover_with_subpath(&source, args.subpath.as_deref()) {
+    let config_root = match std::env::current_dir() {
+        Ok(path) => path,
+        Err(error) => return fail(format!("cannot determine current directory: {error}")),
+    };
+    let cache = Cache::from_env(false);
+    let prepared = match prepare_discovery_source(&args.source, &config_root, None, &cache) {
+        Ok(source) => source,
+        Err(error) => return fail(error),
+    };
+    let discovery = match discover_with_subpath(&prepared.root, args.subpath.as_deref()) {
         Ok(discovery) => discovery,
         Err(error) => {
             eprintln!("{}: {error}", style::error_label());
@@ -760,7 +774,7 @@ fn run_validate(args: ValidateArgs) -> ExitCode {
     let mut diagnostics = discovery.diagnostics.clone();
     diagnostics.extend(discovery.strict_diagnostics());
     let output = ValidateOutput {
-        source: discovery.source().display().to_string(),
+        source: prepared.spec.canonical.clone(),
         diagnostics,
     };
     if args.json {
@@ -793,9 +807,13 @@ fn run_validate(args: ValidateArgs) -> ExitCode {
             };
             let level = style::level(level);
             if let Some(path) = &diagnostic.path {
-                println!("{level}: {}: {}", style::path(path), diagnostic.message);
+                println!(
+                    "{level}: {}: {}",
+                    style::path(&terminal_text(path)),
+                    terminal_text(&diagnostic.message)
+                );
             } else {
-                println!("{level}: {}", diagnostic.message);
+                println!("{level}: {}", terminal_text(&diagnostic.message));
             }
         }
         if !discovery.has_errors() {
@@ -896,6 +914,7 @@ fn use_command(args: UseArgs) -> Result<(String, String, PathBuf), String> {
         &args.selectors,
         &args.agents,
         &args.scope.postinstall_command(),
+        args.allow_source_errors,
     )?;
     config.save_if_changed(&before)?;
     Ok((format!("skills:{}", source.key), version, config.path))
@@ -970,7 +989,7 @@ fn run_install(args: InstallArgs) -> ExitCode {
             ));
         }
         for collision in collisions {
-            eprintln!("{}: {collision}", style::warning_label());
+            eprintln!("{}: {}", style::warning_label(), terminal_text(&collision));
         }
         let output = run_normal_mise_install(&config, args.locked, args.dry_run)?;
         if !output.trim().is_empty() {
@@ -1017,7 +1036,7 @@ fn run_doctor(args: DoctorArgs) -> ExitCode {
             );
         } else {
             for collision in collisions {
-                println!("{}", style::warn_stdout(&collision));
+                println!("{}", style::warn_stdout(&terminal_text(&collision)));
             }
         }
     }) {
@@ -1559,13 +1578,17 @@ fn run_sync(args: SyncArgs) -> ExitCode {
 /// and warnings are diagnostics on stderr.
 fn print_report_details(report: &lifecycle::SyncReport) {
     for replaced in &report.replaced {
-        println!("{} {replaced}", style::warn_stdout("replaced:"));
+        println!(
+            "{} {}",
+            style::warn_stdout("replaced:"),
+            terminal_text(replaced)
+        );
     }
     for conflict in &report.conflicts {
-        eprintln!("{}: {conflict}", style::warning_label());
+        eprintln!("{}: {}", style::warning_label(), terminal_text(conflict));
     }
     for warning in &report.warnings {
-        eprintln!("{}: {warning}", style::warning_label());
+        eprintln!("{}: {}", style::warning_label(), terminal_text(warning));
     }
 }
 
@@ -1620,7 +1643,7 @@ fn run_status(args: StatusArgs) -> ExitCode {
                 }
             }
             for diagnostic in &output.diagnostics {
-                eprintln!("{}: {diagnostic}", style::warning_label());
+                eprintln!("{}: {}", style::warning_label(), terminal_text(diagnostic));
             }
         }
         Ok(())
@@ -1813,7 +1836,10 @@ fn run_cache(args: CacheArgs) -> ExitCode {
     if let Err(error) = cache.validate() {
         return fail(error);
     }
-    let stats = cache.stats();
+    let stats = match cache.stats() {
+        Ok(stats) => stats,
+        Err(error) => return fail(error),
+    };
     if args.json {
         match serde_json::to_string_pretty(&stats) {
             Ok(json) => println!("{json}"),
@@ -1861,15 +1887,8 @@ fn same_source(left: &SourceSpec, right: &SourceSpec) -> bool {
 }
 
 fn fail(error: String) -> ExitCode {
-    eprintln!("{}: {error}", style::error_label());
+    eprintln!("{}: {}", style::error_label(), terminal_text(&error));
     ExitCode::from(1)
-}
-
-fn strip_path_prefix(path: &Path) -> PathBuf {
-    path.to_str()
-        .and_then(|value| value.strip_prefix("path:"))
-        .map(PathBuf::from)
-        .unwrap_or_else(|| path.to_path_buf())
 }
 
 fn write_stdout(value: &str) -> io::Result<()> {
@@ -2076,7 +2095,6 @@ fn print_text(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
 
     #[test]
     fn terminal_text_escapes_untrusted_controls() {
@@ -2085,17 +2103,5 @@ mod tests {
             "safe\\u{1b}]52;c;payload\\u{7}"
         );
         assert_eq!(terminal_text("line\nbreak"), "line\\nbreak");
-    }
-
-    #[test]
-    fn strips_only_the_explicit_path_prefix() {
-        assert_eq!(
-            strip_path_prefix(&PathBuf::from("path:demo")).as_path(),
-            Path::new("demo")
-        );
-        assert_eq!(
-            strip_path_prefix(&PathBuf::from("demo")).as_path(),
-            Path::new("demo")
-        );
     }
 }

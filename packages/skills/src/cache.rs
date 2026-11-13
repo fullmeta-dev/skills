@@ -12,6 +12,7 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -143,7 +144,19 @@ impl Cache {
         if fs::create_dir_all(parent).is_err() {
             return None;
         }
-        if fs::write(built.join(MARKER_NAME), b"ok\n").is_err() {
+        // `create_new` never follows or overwrites an existing entry, so a
+        // repository that tracks `.skills-cache-ok` (for example as a symlink
+        // to a writable file) cannot make us write through it. If the name is
+        // taken, decline caching rather than risk it.
+        let marker = built.join(MARKER_NAME);
+        let Ok(mut file) = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&marker)
+        else {
+            return None;
+        };
+        if file.write_all(b"ok\n").is_err() {
             return None;
         }
         if fs::rename(built, &dir).is_err() {
@@ -166,14 +179,14 @@ impl Cache {
         Some(tmp)
     }
 
-    pub fn stats(&self) -> CacheStats {
+    pub fn stats(&self) -> Result<CacheStats, String> {
         let Some(root) = &self.root else {
-            return CacheStats {
+            return Ok(CacheStats {
                 dir: None,
                 pins: 0,
                 checkouts: 0,
                 bytes: 0,
-            };
+            });
         };
         let mut stats = CacheStats {
             dir: Some(root.display().to_string()),
@@ -182,34 +195,59 @@ impl Cache {
             bytes: 0,
         };
         let pins = root.join("pins");
-        if let Ok(entries) = fs::read_dir(&pins) {
-            for entry in entries.flatten() {
-                if entry
-                    .path()
-                    .extension()
-                    .is_some_and(|value| value == "json")
-                {
-                    stats.pins += 1;
-                    stats.bytes += entry.metadata().map(|meta| meta.len()).unwrap_or(0);
+        match fs::read_dir(&pins) {
+            Ok(entries) => {
+                for entry in entries.flatten() {
+                    if entry
+                        .path()
+                        .extension()
+                        .is_some_and(|value| value == "json")
+                    {
+                        stats.pins += 1;
+                        stats.bytes += entry.metadata().map(|meta| meta.len()).unwrap_or(0);
+                    }
                 }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!(
+                    "cannot read cache directory {}: {error}",
+                    pins.display()
+                ))
             }
         }
         let checkouts = root.join("checkouts");
-        if let Ok(repositories) = fs::read_dir(&checkouts) {
-            for repository in repositories.flatten() {
-                let Ok(revisions) = fs::read_dir(repository.path()) else {
-                    continue;
-                };
-                for revision in revisions.flatten() {
-                    let path = revision.path();
-                    if path.is_dir() && path.join(MARKER_NAME).is_file() {
-                        stats.checkouts += 1;
+        match fs::read_dir(&checkouts) {
+            Ok(repositories) => {
+                for repository in repositories.flatten() {
+                    let revisions = match fs::read_dir(repository.path()) {
+                        Ok(revisions) => revisions,
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                        Err(error) => {
+                            return Err(format!(
+                                "cannot read cache directory {}: {error}",
+                                repository.path().display()
+                            ))
+                        }
+                    };
+                    for revision in revisions.flatten() {
+                        let path = revision.path();
+                        if path.is_dir() && path.join(MARKER_NAME).is_file() {
+                            stats.checkouts += 1;
+                        }
+                        stats.bytes += directory_size(&path);
                     }
-                    stats.bytes += directory_size(&path);
                 }
             }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!(
+                    "cannot read cache directory {}: {error}",
+                    checkouts.display()
+                ))
+            }
         }
-        stats
+        Ok(stats)
     }
 
     /// Reject a cache root that exists but is not a directory, so `cache`
@@ -231,15 +269,18 @@ impl Cache {
 
     pub fn clean(&self) -> Result<CacheStats, String> {
         self.validate()?;
-        let before = self.stats();
+        let before = self.stats()?;
         let Some(root) = &self.root else {
             return Ok(before);
         };
         for name in ["pins", "checkouts", "tmp"] {
             let path = root.join(name);
-            if path.exists() {
-                fs::remove_dir_all(&path)
-                    .map_err(|error| format!("cannot clean cache {}: {error}", path.display()))?;
+            match fs::remove_dir_all(&path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(format!("cannot clean cache {}: {error}", path.display()))
+                }
             }
         }
         Ok(before)
@@ -391,13 +432,13 @@ mod tests {
         fs::create_dir_all(&untrusted).unwrap();
         assert!(cache.cached_checkout(url, "rev2").is_none());
         assert!(cache.cached_checkout(url, "rev3").is_none());
-        let stats = cache.stats();
+        let stats = cache.stats().unwrap();
         assert_eq!(stats.pins, 0);
         assert_eq!(stats.checkouts, 1);
         assert!(stats.bytes > 0);
         cache.clean().unwrap();
         assert!(cache.cached_checkout(url, "rev1").is_none());
-        assert_eq!(cache.stats().checkouts, 0);
+        assert_eq!(cache.stats().unwrap().checkouts, 0);
     }
 
     #[test]
@@ -409,5 +450,29 @@ mod tests {
         assert!(make_cache(&temp.path().join("missing"), 300, false)
             .validate()
             .is_ok());
+    }
+
+    #[test]
+    fn publish_declines_a_reserved_marker_entry() {
+        let temp = TempDir::new().unwrap();
+        let url = "https://example.invalid/r.git";
+        let cache = make_cache(temp.path(), 300, false);
+        let built = temp.path().join("built");
+        fs::create_dir_all(&built).unwrap();
+        let marker = built.join(MARKER_NAME);
+        fs::write(&marker, b"reserved").unwrap();
+        assert!(cache.publish_checkout(url, "rev1", &built).is_none());
+        assert_eq!(fs::read(&marker).unwrap(), b"reserved");
+
+        // A tracked marker symlink to a writable file must never be followed.
+        #[cfg(unix)]
+        {
+            fs::remove_file(&marker).unwrap();
+            let sentinel = temp.path().join("sentinel");
+            fs::write(&sentinel, b"keep").unwrap();
+            std::os::unix::fs::symlink(&sentinel, &marker).unwrap();
+            assert!(cache.publish_checkout(url, "rev1", &built).is_none());
+            assert_eq!(fs::read(&sentinel).unwrap(), b"keep");
+        }
     }
 }

@@ -587,7 +587,7 @@ _skills() {
             return 0
             ;;
         skills__subcmd__use)
-            opts="-h --env --global --path --agent --subpath --track --reference --locked --help"
+            opts="-h --env --global --path --agent --subpath --track --reference --locked --allow-source-errors --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0

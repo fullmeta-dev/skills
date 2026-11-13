@@ -60,6 +60,7 @@ complete -c skills -n "__fish_skills_using_subcommand use" -l track -d 'Branch o
 complete -c skills -n "__fish_skills_using_subcommand use" -l reference -d 'Git ref or full commit to resolve now and record as track' -r
 complete -c skills -n "__fish_skills_using_subcommand use" -l global -d 'Select the user-owned global mise config'
 complete -c skills -n "__fish_skills_using_subcommand use" -l locked -d 'Do not resolve or rewrite an existing immutable version'
+complete -c skills -n "__fish_skills_using_subcommand use" -l allow-source-errors -d 'Tolerate malformed skill files outside the selection; source-wide errors still fail'
 complete -c skills -n "__fish_skills_using_subcommand use" -s h -l help -d 'Print help'
 complete -c skills -n "__fish_skills_using_subcommand upgrade" -l env -d 'Select mise\'s environment-specific config (`mise.<env>.toml`)' -r
 complete -c skills -n "__fish_skills_using_subcommand upgrade" -l path -d 'Select this mise config file (or mise.toml inside a directory)' -r -F

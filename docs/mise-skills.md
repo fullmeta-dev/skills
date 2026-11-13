@@ -152,7 +152,10 @@ backslashes, or an absolute prefix. Installed artifacts are always complete
 source snapshots so two declarations at the same revision share one immutable
 install; `--subpath` and `include`/`exclude` are applied at selection time, not
 baked into the artifact. A malformed skill outside the selection is reported as
-a warning and does not block activating the selected skills.
+a warning and does not block activating the selected skills. A malformed skill
+outside the selection fails activation unless the declaration sets
+`allow_source_errors = true` (`skills use --allow-source-errors`); source-wide
+policy errors always fail, and a malformed selected skill always fails.
 
 Selectors are bare names, repository-relative globs, or tags:
 

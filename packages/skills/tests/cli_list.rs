@@ -305,3 +305,49 @@ fn list_accepts_flags_after_positional_selectors() {
     let value: Value = serde_json::from_slice(&output.stdout).expect("JSON list output");
     assert!(value["selection"].is_object());
 }
+
+#[test]
+fn validate_fetches_a_remote_source() {
+    let repository = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let skill = repository.path().join("skills/demo");
+    fs::create_dir_all(&skill).unwrap();
+    fs::write(
+        skill.join("SKILL.md"),
+        "---\nname: demo\ndescription: demo\n---\n",
+    )
+    .unwrap();
+    assert!(git(repository.path(), &["init", "--quiet"])
+        .status
+        .success());
+    assert!(git(repository.path(), &["add", "."]).status.success());
+    assert!(git(
+        repository.path(),
+        &[
+            "-c",
+            "user.name=skills-test",
+            "-c",
+            "user.email=skills-test@example.invalid",
+            "commit",
+            "--quiet",
+            "-m",
+            "fixture",
+        ]
+    )
+    .status
+    .success());
+    let source = format!("git:file://{}", repository.path().display());
+    let output = Command::new(env!("CARGO_BIN_EXE_skills"))
+        .env("SKILLS_CACHE_DIR", cache.path())
+        .args(["validate", &source, "--json"])
+        .output()
+        .expect("run skills");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: Value = serde_json::from_slice(&output.stdout).expect("JSON validate output");
+    assert_eq!(value["source"], source);
+    assert!(value["diagnostics"].is_array());
+}

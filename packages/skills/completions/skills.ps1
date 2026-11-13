@@ -68,6 +68,7 @@ Register-ArgumentCompleter -Native -CommandName 'skills' -ScriptBlock {
             [CompletionResult]::new('--reference', '--reference', [CompletionResultType]::ParameterName, 'Git ref or full commit to resolve now and record as track')
             [CompletionResult]::new('--global', '--global', [CompletionResultType]::ParameterName, 'Select the user-owned global mise config')
             [CompletionResult]::new('--locked', '--locked', [CompletionResultType]::ParameterName, 'Do not resolve or rewrite an existing immutable version')
+            [CompletionResult]::new('--allow-source-errors', '--allow-source-errors', [CompletionResultType]::ParameterName, 'Tolerate malformed skill files outside the selection; source-wide errors still fail')
             [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help')
             [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help')
             break

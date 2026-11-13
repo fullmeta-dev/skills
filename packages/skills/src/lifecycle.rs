@@ -789,7 +789,7 @@ fn desired_tool_links(config: &Config, global: bool, tool: &ToolInfo) -> Result<
         if diagnostic.level != DiagnosticLevel::Error {
             continue;
         }
-        if !diagnostic_is_tolerated(&tool.include, diagnostic, &selection.selected) {
+        if !diagnostic_is_tolerated(tool.allow_source_errors, diagnostic, &selection.selected) {
             return Err(format!(
                 "cannot discover {}: source contains errors",
                 tool.key
@@ -854,33 +854,27 @@ struct ToolLinks {
     warnings: Vec<String>,
 }
 
-/// Whether a source error can be downgraded to a warning. Only a malformed
-/// skill file the declaration could not have selected qualifies: source-wide
-/// policy errors (catalog, links, and so on) and anything a selector or the
-/// implicit select-all could reach stay fatal.
+/// Whether a source error can be downgraded to a warning. This is opt-in per
+/// declaration (`allow_source_errors = true`) because discovery drops malformed
+/// skills, so a declaration could otherwise activate fewer skills than it
+/// selected. Even when enabled, only a malformed skill file is tolerated, and
+/// only when it is not part of the selection; source-wide policy errors
+/// (catalog, links, and so on) always fail.
 fn diagnostic_is_tolerated(
-    includes: &[String],
+    allow_source_errors: bool,
     diagnostic: &Diagnostic,
     selected: &[Skill],
 ) -> bool {
+    if !allow_source_errors {
+        return false;
+    }
     let Some(path) = diagnostic.path.as_deref() else {
         return false;
     };
     if !path.ends_with("SKILL.md") {
         return false;
     }
-    if diagnostic_touches_selection(diagnostic, selected) {
-        return false;
-    }
-    // With no explicit selection the declaration intends every skill, and a
-    // tag selector could have matched the malformed skill, so neither can be
-    // assumed unselected.
-    if includes.is_empty() || includes.iter().any(|selector| selector.starts_with("tag:")) {
-        return false;
-    }
-    !includes
-        .iter()
-        .any(|selector| selector_matches_path(selector, path))
+    !diagnostic_touches_selection(diagnostic, selected)
 }
 
 fn diagnostic_touches_selection(diagnostic: &Diagnostic, selected: &[Skill]) -> bool {
@@ -890,26 +884,6 @@ fn diagnostic_touches_selection(diagnostic: &Diagnostic, selected: &[Skill]) -> 
     selected
         .iter()
         .any(|skill| path == skill.path || path.starts_with(&format!("{}/", skill.path)))
-}
-
-/// Best-effort match of one selector against a diagnostic path, used only to
-/// decide whether a malformed skill could have been selected.
-fn selector_matches_path(selector: &str, path: &str) -> bool {
-    let directory = path.strip_suffix("/SKILL.md").unwrap_or(path);
-    let basename = directory.rsplit('/').next().unwrap_or(directory);
-    if selector == directory || selector == basename || selector == path {
-        return true;
-    }
-    if directory.ends_with(&format!("/{selector}")) {
-        return true;
-    }
-    if selector.contains(['*', '?', '[']) {
-        if let Ok(glob) = globset::Glob::new(selector) {
-            let matcher = glob.compile_matcher();
-            return matcher.is_match(directory) || matcher.is_match(basename);
-        }
-    }
-    false
 }
 
 fn describe_diagnostic(diagnostic: &Diagnostic) -> String {

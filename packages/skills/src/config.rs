@@ -34,6 +34,15 @@ pub struct ToolInfo {
     pub exclude: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub agents: Vec<String>,
+    /// Tolerate malformed skill files outside the selection. Source-wide
+    /// errors still fail. Off by default so a declaration never silently
+    /// activates fewer skills than intended.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub allow_source_errors: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 impl Scope {
@@ -266,6 +275,7 @@ pub fn skill_tools(document: &DocumentMut) -> Result<Vec<ToolInfo>, String> {
         let include = string_array_field(table, "include", key)?;
         let exclude = string_array_field(table, "exclude", key)?;
         let agents = string_array_field(table, "agents", key)?;
+        let allow_source_errors = bool_field(table, "allow_source_errors", key)?;
         result.push(ToolInfo {
             key: key.to_string(),
             source,
@@ -275,6 +285,7 @@ pub fn skill_tools(document: &DocumentMut) -> Result<Vec<ToolInfo>, String> {
             include,
             exclude,
             agents,
+            allow_source_errors,
         });
     }
     Ok(result)
@@ -315,6 +326,7 @@ pub fn apply_use(
     selectors: &[String],
     agents: &[String],
     postinstall: &str,
+    allow_source_errors: bool,
 ) -> Result<(), String> {
     let key = format!("skills:{}", source.key);
     {
@@ -363,6 +375,11 @@ pub fn apply_use(
         }
         if !agents.is_empty() {
             table["agents"] = string_array(agents);
+        }
+        if allow_source_errors {
+            table["allow_source_errors"] = value(true);
+        } else {
+            table.remove("allow_source_errors");
         }
     }
     ensure_postinstall_command(document, postinstall)
@@ -645,6 +662,15 @@ fn rewrite_managed_postinstall(value: &str, desired: &str) -> Option<String> {
     found.then_some(rewritten)
 }
 
+fn bool_field(table: &Table, field: &str, key: &str) -> Result<bool, String> {
+    match table.get(field) {
+        None => Ok(false),
+        Some(item) => item
+            .as_bool()
+            .ok_or_else(|| format!("skill tool {key:?} field {field:?} must be a boolean")),
+    }
+}
+
 fn string_field(table: &Table, field: &str, key: &str) -> Result<String, String> {
     table
         .get(field)
@@ -849,6 +875,7 @@ mod tests {
             &["hello".into()],
             &["pi".into()],
             POSTINSTALL_COMMAND,
+            false,
         )
         .unwrap();
         let rendered = document.to_string();
@@ -870,6 +897,7 @@ mod tests {
             &[],
             &[],
             POSTINSTALL_COMMAND,
+            false,
         )
         .is_err());
     }

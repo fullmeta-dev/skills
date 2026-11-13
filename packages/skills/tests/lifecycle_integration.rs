@@ -1514,6 +1514,7 @@ fn unselected_source_errors_warn_without_blocking_activation() {
             "good",
             "--agent",
             "agents",
+            "--allow-source-errors",
         ],
         &envs,
     );
@@ -1676,5 +1677,60 @@ fn selected_source_errors_still_block_activation() {
         String::from_utf8_lossy(&output.stderr).contains("source contains errors"),
         "{}",
         String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn forced_replacement_is_rolled_back_when_sync_fails() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path().join("home");
+    let data = temp.path().join("data");
+    let state = temp.path().join("state");
+    let project = temp.path().join("project");
+    let source = temp.path().join("source");
+    for directory in [&home, &data, &state, &project, &source] {
+        fs::create_dir_all(directory).unwrap();
+    }
+    skill(&source, "demo");
+    let config = project.join("mise.toml");
+    let envs = [
+        ("HOME", home.as_path()),
+        ("MISE_DATA_DIR", data.as_path()),
+        ("MISE_STATE_DIR", state.as_path()),
+    ];
+    let output = run(
+        &project,
+        &[
+            "use",
+            "--path",
+            config.to_str().unwrap(),
+            &format!("path:{}", source.display()),
+            "demo",
+            "--agent",
+            "pi",
+        ],
+        &envs,
+    );
+    assert!(output.status.success());
+    let pinned = version(&config);
+    install_snapshot(&data, &pinned, &source);
+    let target = project.join(".pi/skills/demo");
+    fs::create_dir_all(&target).unwrap();
+    fs::write(target.join("SKILL.md"), "foreign").unwrap();
+
+    let output = run_with(
+        &project,
+        &["sync", "--path", config.to_str().unwrap(), "--force"],
+        &envs,
+        &[("MISE_SKILLS_FAIL_MANIFEST_WRITE", "1")],
+    );
+    assert!(!output.status.success());
+    assert!(
+        target.is_dir() && !target.is_symlink(),
+        "a failed forced sync must restore the displaced directory"
+    );
+    assert_eq!(
+        fs::read_to_string(target.join("SKILL.md")).unwrap(),
+        "foreign"
     );
 }

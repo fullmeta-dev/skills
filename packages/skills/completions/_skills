@@ -57,6 +57,7 @@ _arguments "${_arguments_options[@]}" : \
 '(--track)--reference=[Git ref or full commit to resolve now and record as track]:REFERENCE:_default' \
 '(--path)--global[Select the user-owned global mise config]' \
 '--locked[Do not resolve or rewrite an existing immutable version]' \
+'--allow-source-errors[Tolerate malformed skill files outside the selection; source-wide errors still fail]' \
 '-h[Print help]' \
 '--help[Print help]' \
 ':source -- Source (`owner/repository`, `github\:...`, `git\:...`, or `path\:...`):_default' \
@@ -162,7 +163,7 @@ _arguments "${_arguments_options[@]}" : \
 '--json[Emit stable machine-readable diagnostics]' \
 '-h[Print help]' \
 '--help[Print help]' \
-':source -- Local checkout or snapshot directory. `path\:` is accepted as a prefix:_files' \
+':source -- Source to validate\: local directory, `path\:DIR`, GitHub shorthand, or Git URL:_default' \
 && ret=0
 ;;
 (check)
@@ -171,7 +172,7 @@ _arguments "${_arguments_options[@]}" : \
 '--json[Emit stable machine-readable diagnostics]' \
 '-h[Print help]' \
 '--help[Print help]' \
-':source -- Local checkout or snapshot directory. `path\:` is accepted as a prefix:_files' \
+':source -- Source to validate\: local directory, `path\:DIR`, GitHub shorthand, or Git URL:_default' \
 && ret=0
 ;;
 (completions)

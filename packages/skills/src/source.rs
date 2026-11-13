@@ -260,14 +260,15 @@ pub fn prepare_discovery_source(
     )?;
 
     let mut scratch = Some(scratch);
-    let root = match cache.publish_checkout(&url, &revision, scratch.as_ref().unwrap().path()) {
+    let built = scratch.as_ref().unwrap().path().to_path_buf();
+    let root = match cache.publish_checkout(&url, &revision, &built) {
         Some(published) => {
-            if let Some(directory) = scratch.take() {
-                let _ = directory.keep();
-            }
+            // Drop the guard: a successful rename moved the contents, and a
+            // losing publisher's scratch must still be removed.
+            scratch = None;
             published
         }
-        None => scratch.as_ref().unwrap().path().to_path_buf(),
+        None => built,
     };
     Ok(DiscoverySource {
         version: pin.version,
