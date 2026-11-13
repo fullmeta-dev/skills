@@ -55,8 +55,15 @@ skills status
 
 `list` also accepts `path:DIR`, local directories, `github:owner/repository`,
 and Git URLs (`https://`, `ssh://`, or `file://`). Remote sources are fetched
-at an immutable revision into a temporary checkout. Use `--track BRANCH_OR_TAG`
+at an immutable revision into a read-only checkout. Use `--track BRANCH_OR_TAG`
 or `--reference REF` to preview a particular revision without editing config.
+
+`list` caches remote checkouts by revision (a revision cannot change) under
+`$SKILLS_CACHE_DIR` (else `$MISE_CACHE_DIR/skills`, else `~/.cache/skills`),
+and caches resolved refs for `SKILLS_CACHE_TTL` seconds (default 300). Repeat
+listings of the same revision are then local. `--refresh` re-resolves refs
+instead of using the cached resolution, `SKILLS_NO_CACHE=1` disables caching,
+and `skills cache` reports or cleans the cache.
 
 If `skills` is not the expected executable, compare `mise which skills` and
 `command -v skills`. `skills doctor --global` reports a foreign executable;
@@ -64,7 +71,12 @@ remove or reorder that program explicitly after review. The installer never
 deletes a pre-existing `skills` executable.
 
 `skills use` resolves a full Git commit or local tree digest and writes the
-selected config. `skills install` coordinates normal `mise install` for that
+selected config. A `git:` source is keyed by host and repository
+(`git:git@github.com:owner/repo.git` becomes `skills:github.com/owner/repo`).
+Installed artifacts are always complete source snapshots so two declarations
+at the same revision share one immutable install; `source_subpath` and
+`include`/`exclude` are applied at selection time, not baked into the artifact.
+`skills install` coordinates normal `mise install` for that
 config, then runs a locked link sync. The generated postinstall hook is the
 direct command `skills sync --locked` for a project; a global or `--path`
 declaration writes the matching `--global`/`--path` flags so the hook targets
@@ -104,6 +116,14 @@ skills upgrade
 skills install
 skills sync --locked
 ```
+
+`use` records the remote default branch as the update track, so
+`skills upgrade` is how "latest" is expressed; there is deliberately no
+`version = "latest"`, because mise versions must be immutable. Sync and
+install never overwrite an unmanaged or changed target. To adopt existing
+files or symlinks (for example, when migrating from another skills manager),
+pass `--force`: conflicting symlinks are removed and conflicting files or
+directories are moved aside to `.skills-replaced-<name>-<timestamp>`.
 
 Update the CLI and its pinned backend as a compatible pair:
 

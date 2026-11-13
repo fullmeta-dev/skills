@@ -35,6 +35,7 @@ Register-ArgumentCompleter -Native -CommandName 'skills' -ScriptBlock {
             [CompletionResult]::new('status', 'status', [CompletionResultType]::ParameterValue, 'Show declared skill sources and their link state')
             [CompletionResult]::new('remove', 'remove', [CompletionResultType]::ParameterValue, 'Remove a declaration or selected entries from its include policy')
             [CompletionResult]::new('prune', 'prune', [CompletionResultType]::ParameterValue, 'Remove stale links recorded for the selected configuration root')
+            [CompletionResult]::new('cache', 'cache', [CompletionResultType]::ParameterValue, 'Inspect or clean the immutable source cache used by list')
             [CompletionResult]::new('validate', 'validate', [CompletionResultType]::ParameterValue, 'Report strict Agent Skills conformance without blocking normal use')
             [CompletionResult]::new('check', 'check', [CompletionResultType]::ParameterValue, 'Report strict Agent Skills conformance without blocking normal use')
             [CompletionResult]::new('completions', 'completions', [CompletionResultType]::ParameterValue, 'Generate a completion script for one supported shell')
@@ -53,6 +54,7 @@ Register-ArgumentCompleter -Native -CommandName 'skills' -ScriptBlock {
             [CompletionResult]::new('--tree', '--tree', [CompletionResultType]::ParameterName, 'Render every selected skill''s complete artifact tree')
             [CompletionResult]::new('--json', '--json', [CompletionResultType]::ParameterName, 'Emit stable machine-readable JSON')
             [CompletionResult]::new('--explain', '--explain', [CompletionResultType]::ParameterName, 'Explain shadowing, selector decisions, and missing selectors')
+            [CompletionResult]::new('--refresh', '--refresh', [CompletionResultType]::ParameterName, 'Re-resolve Git refs instead of using a cached resolution')
             [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help')
             [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help')
             break
@@ -85,6 +87,7 @@ Register-ArgumentCompleter -Native -CommandName 'skills' -ScriptBlock {
             [CompletionResult]::new('--global', '--global', [CompletionResultType]::ParameterName, 'Select the user-owned global mise config')
             [CompletionResult]::new('--locked', '--locked', [CompletionResultType]::ParameterName, 'Require mise''s existing lockfile data without resolving tool URLs')
             [CompletionResult]::new('--dry-run', '--dry-run', [CompletionResultType]::ParameterName, 'Preview normal mise installation without changing files; skips the direct sync')
+            [CompletionResult]::new('--force', '--force', [CompletionResultType]::ParameterName, 'Replace unmanaged or changed targets at desired link paths')
             [CompletionResult]::new('--accept-collision', '--accept-collision', [CompletionResultType]::ParameterName, 'Explicitly accept an unrelated existing `skills` executable')
             [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help')
             [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help')
@@ -113,6 +116,7 @@ Register-ArgumentCompleter -Native -CommandName 'skills' -ScriptBlock {
             [CompletionResult]::new('--path', '--path', [CompletionResultType]::ParameterName, 'Select this mise config file (or mise.toml inside a directory)')
             [CompletionResult]::new('--global', '--global', [CompletionResultType]::ParameterName, 'Select the user-owned global mise config')
             [CompletionResult]::new('--locked', '--locked', [CompletionResultType]::ParameterName, 'Accepted for the generated postinstall hook; sync never resolves versions')
+            [CompletionResult]::new('--force', '--force', [CompletionResultType]::ParameterName, 'Replace unmanaged or changed targets at desired link paths')
             [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help')
             [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help')
             break
@@ -138,6 +142,13 @@ Register-ArgumentCompleter -Native -CommandName 'skills' -ScriptBlock {
             [CompletionResult]::new('--env', '--env', [CompletionResultType]::ParameterName, 'Select mise''s environment-specific config (`mise.<env>.toml`)')
             [CompletionResult]::new('--path', '--path', [CompletionResultType]::ParameterName, 'Select this mise config file (or mise.toml inside a directory)')
             [CompletionResult]::new('--global', '--global', [CompletionResultType]::ParameterName, 'Select the user-owned global mise config')
+            [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help')
+            [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help')
+            break
+        }
+        'skills;cache' {
+            [CompletionResult]::new('--clean', '--clean', [CompletionResultType]::ParameterName, 'Remove every cached entry')
+            [CompletionResult]::new('--json', '--json', [CompletionResultType]::ParameterName, 'Emit machine-readable JSON')
             [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help')
             [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help')
             break
@@ -177,6 +188,7 @@ Register-ArgumentCompleter -Native -CommandName 'skills' -ScriptBlock {
             [CompletionResult]::new('status', 'status', [CompletionResultType]::ParameterValue, 'Show declared skill sources and their link state')
             [CompletionResult]::new('remove', 'remove', [CompletionResultType]::ParameterValue, 'Remove a declaration or selected entries from its include policy')
             [CompletionResult]::new('prune', 'prune', [CompletionResultType]::ParameterValue, 'Remove stale links recorded for the selected configuration root')
+            [CompletionResult]::new('cache', 'cache', [CompletionResultType]::ParameterValue, 'Inspect or clean the immutable source cache used by list')
             [CompletionResult]::new('validate', 'validate', [CompletionResultType]::ParameterValue, 'Report strict Agent Skills conformance without blocking normal use')
             [CompletionResult]::new('completions', 'completions', [CompletionResultType]::ParameterValue, 'Generate a completion script for one supported shell')
             [CompletionResult]::new('help', 'help', [CompletionResultType]::ParameterValue, 'Print this message or the help of the given subcommand(s)')
@@ -210,6 +222,9 @@ Register-ArgumentCompleter -Native -CommandName 'skills' -ScriptBlock {
             break
         }
         'skills;help;prune' {
+            break
+        }
+        'skills;help;cache' {
             break
         }
         'skills;help;validate' {

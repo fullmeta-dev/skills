@@ -60,8 +60,14 @@ skills status --json
 `list` accepts the same source grammar as `use`: a local `path:DIR` or
 ordinary directory, `owner/repository`, `github:owner/repository`, or a
 `git:`/`https:`/`ssh:`/`file:` URL. Git sources are fetched at a resolved full
-commit in a temporary checkout and removed after the read-only operation. Use
-`--track BRANCH_OR_TAG` or `--reference REF` to preview a particular revision.
+commit into a read-only checkout. Use `--track BRANCH_OR_TAG` or
+`--reference REF` to preview a particular revision.
+
+`list` caches remote checkouts by immutable revision under
+`$SKILLS_CACHE_DIR` (else `$MISE_CACHE_DIR/skills`, else `~/.cache/skills`) and
+caches resolved refs for `SKILLS_CACHE_TTL` seconds (default 300), so repeat
+listings are local. `--refresh` re-resolves refs, `SKILLS_NO_CACHE=1` disables
+caching, and `skills cache [--clean] [--json]` reports or removes the cache.
 Selectors can be names, aliases, `tag:name`, or repository-relative globs;
 use `--explain` to see matching, shadowing, and missing-selector decisions.
 A source repository can publish a focused catalog with `.mise/skills.toml`:
@@ -100,17 +106,17 @@ Diagnostics print the effective config path and environment.
 ## Commands
 
 ```text
-skills list SOURCE [SELECTORS...]
+skills list SOURCE [SELECTORS...] [--track REF|--reference REF] [--refresh]
 # SOURCE may be path:DIR, owner/repository, github:owner/repository, or git URL
-# Add --track REF / --reference REF for a read-only remote preview
-skills use [--global|--path PATH|--env ENV] SOURCE [SELECTORS...] --agent AGENT...
-skills install [--global|--path PATH|--env ENV] [--locked] [--dry-run]
-skills sync [--global|--path PATH|--env ENV] [--locked]
+skills use [--global|--path PATH|--env ENV] SOURCE [SELECTORS...] --agent AGENT
+skills install [--global|--path PATH|--env ENV] [--locked] [--dry-run] [--force]
+skills sync [--global|--path PATH|--env ENV] [--locked] [--force]
 skills status [--global|--path PATH|--env ENV] [--json]
 skills upgrade [TOOL...]
 skills self-update [--version VERSION] [--dry-run]
 skills remove [--global|--path PATH|--env ENV] TOOL [SELECTORS...]
 skills prune [--global|--path PATH|--env ENV]
+skills cache [--clean] [--json]
 skills doctor [--global|--path PATH|--env ENV]
 ```
 
@@ -119,9 +125,13 @@ skills doctor [--global|--path PATH|--env ENV]
 `name`, `description`, `tags`, `aliases`, and artifact `files`.
 
 `use` edits only the selected config and resolves an immutable `rev:<commit>`
-for Git sources or `tree-<sha256>` for local sources. `track` records update
-intent only. `upgrade` is the explicit source-pin refresh; install, postinstall,
-and sync never follow tracks. `self-update` queries the latest GitHub release,
+for Git sources or `tree-<sha256>` for local sources. A `git:` source is keyed
+by host and repository (`git:git@github.com:owner/repo.git` becomes
+`skills:github.com/owner/repo`). `track` records update intent only; `use`
+records the remote default branch, so `skills upgrade` followed by
+`skills install` is how "latest" is expressed. There is deliberately no
+`version = "latest"`, because mise versions must be immutable. install,
+postinstall, and sync never follow tracks. `self-update` queries the latest GitHub release,
 then consumes that release's immutable `release-compatibility.json` asset. It
 inspects the installed backend in mise's plugin data and updates the CLI/backend
 pair only after the new CLI is installed. A failed self-update leaves the old
@@ -137,7 +147,11 @@ Accepted sources are `owner/repository`, `github:owner/repository`,
 `git:https://host/org/repository.git`, and
 `path:relative/or/absolute/directory`. Local paths are relative to the config
 that declares them. `--subpath` must be relative and cannot contain `..`,
-backslashes, or an absolute prefix.
+backslashes, or an absolute prefix. Installed artifacts are always complete
+source snapshots so two declarations at the same revision share one immutable
+install; `--subpath` and `include`/`exclude` are applied at selection time, not
+baked into the artifact. A malformed skill outside the selection is reported as
+a warning and does not block activating the selected skills.
 
 Selectors are bare names, repository-relative globs, or tags:
 
@@ -177,7 +191,9 @@ up to date. They therefore do not appear in `git status`. A linked worktree is
 left alone, because its `info/exclude` is shared with the main checkout.
 
 An existing unmanaged file, directory, or symlink is a collision. `sync` and
-`install` report it and leave it untouched. A changed managed link is also a
+`install` report it and leave it untouched unless `--force` is given: symlinks
+are removed and files or directories are moved aside to
+`.skills-replaced-<name>-<timestamp>`. A changed managed link is also a
 collision. Run `skills doctor` to inspect PATH and mise owners without relying
 on undocumented PATH precedence; use `--accept-collision` only after review.
 `prune` removes stale links recorded for this config and never materializes

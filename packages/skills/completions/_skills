@@ -40,6 +40,7 @@ _arguments "${_arguments_options[@]}" : \
 '--tree[Render every selected skill'\''s complete artifact tree]' \
 '--json[Emit stable machine-readable JSON]' \
 '--explain[Explain shadowing, selector decisions, and missing selectors]' \
+'--refresh[Re-resolve Git refs instead of using a cached resolution]' \
 '-h[Print help]' \
 '--help[Print help]' \
 ':source -- Local path, GitHub shorthand, or Git URL to inspect:_default' \
@@ -50,7 +51,7 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 '--env=[Select mise'\''s environment-specific config (\`mise.<env>.toml\`)]:ENV:_default' \
 '(--global)--path=[Select this mise config file (or mise.toml inside a directory)]:PATH:_files' \
-'*--agent=[Agent adapters to record in the declaration]:AGENTS:_default' \
+'*--agent=[Agent adapters to record in the declaration]:AGENT:_default' \
 '--subpath=[Source-relative skill directory, validated against traversal]:SUBPATH:_default' \
 '(--reference)--track=[Branch or tag to resolve now and record as track. Defaults to the remote'\''s default branch]:TRACK:_default' \
 '(--track)--reference=[Git ref or full commit to resolve now and record as track]:REFERENCE:_default' \
@@ -80,6 +81,7 @@ _arguments "${_arguments_options[@]}" : \
 '(--path)--global[Select the user-owned global mise config]' \
 '--locked[Require mise'\''s existing lockfile data without resolving tool URLs]' \
 '--dry-run[Preview normal mise installation without changing files; skips the direct sync]' \
+'--force[Replace unmanaged or changed targets at desired link paths]' \
 '--accept-collision[Explicitly accept an unrelated existing \`skills\` executable]' \
 '-h[Print help]' \
 '--help[Print help]' \
@@ -111,6 +113,7 @@ _arguments "${_arguments_options[@]}" : \
 '(--global)--path=[Select this mise config file (or mise.toml inside a directory)]:PATH:_files' \
 '(--path)--global[Select the user-owned global mise config]' \
 '--locked[Accepted for the generated postinstall hook; sync never resolves versions]' \
+'--force[Replace unmanaged or changed targets at desired link paths]' \
 '-h[Print help]' \
 '--help[Print help]' \
 && ret=0
@@ -141,6 +144,14 @@ _arguments "${_arguments_options[@]}" : \
 '--env=[Select mise'\''s environment-specific config (\`mise.<env>.toml\`)]:ENV:_default' \
 '(--global)--path=[Select this mise config file (or mise.toml inside a directory)]:PATH:_files' \
 '(--path)--global[Select the user-owned global mise config]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(cache)
+_arguments "${_arguments_options[@]}" : \
+'--clean[Remove every cached entry]' \
+'--json[Emit machine-readable JSON]' \
 '-h[Print help]' \
 '--help[Print help]' \
 && ret=0
@@ -229,6 +240,10 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(cache)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
 (validate)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
@@ -263,6 +278,7 @@ _skills_commands() {
 'status:Show declared skill sources and their link state' \
 'remove:Remove a declaration or selected entries from its include policy' \
 'prune:Remove stale links recorded for the selected configuration root' \
+'cache:Inspect or clean the immutable source cache used by list' \
 'validate:Report strict Agent Skills conformance without blocking normal use' \
 'check:Report strict Agent Skills conformance without blocking normal use' \
 'completions:Generate a completion script for one supported shell' \
@@ -270,6 +286,11 @@ _skills_commands() {
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'skills commands' commands "$@"
+}
+(( $+functions[_skills__subcmd__cache_commands] )) ||
+_skills__subcmd__cache_commands() {
+    local commands; commands=()
+    _describe -t commands 'skills cache commands' commands "$@"
 }
 (( $+functions[_skills__subcmd__completions_commands] )) ||
 _skills__subcmd__completions_commands() {
@@ -294,11 +315,17 @@ _skills__subcmd__help_commands() {
 'status:Show declared skill sources and their link state' \
 'remove:Remove a declaration or selected entries from its include policy' \
 'prune:Remove stale links recorded for the selected configuration root' \
+'cache:Inspect or clean the immutable source cache used by list' \
 'validate:Report strict Agent Skills conformance without blocking normal use' \
 'completions:Generate a completion script for one supported shell' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'skills help commands' commands "$@"
+}
+(( $+functions[_skills__subcmd__help__subcmd__cache_commands] )) ||
+_skills__subcmd__help__subcmd__cache_commands() {
+    local commands; commands=()
+    _describe -t commands 'skills help cache commands' commands "$@"
 }
 (( $+functions[_skills__subcmd__help__subcmd__completions_commands] )) ||
 _skills__subcmd__help__subcmd__completions_commands() {

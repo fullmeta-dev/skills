@@ -52,7 +52,11 @@ fn documented_commands_are_self_documenting_for_operators_and_agents() {
         "~/.pi/agent/skills",
         "Ownership and safety:",
         "Lifecycle:",
+        "Caching (list):",
         "Examples:",
+        "--force",
+        "--refresh",
+        "There is no version = \"latest\"",
     ] {
         assert!(top.contains(phrase), "top-level help missing {phrase}");
     }
@@ -77,6 +81,7 @@ fn documented_commands_are_self_documenting_for_operators_and_agents() {
         "doctor",
         "remove",
         "prune",
+        "cache",
         "validate",
         "completions",
     ] {
@@ -92,9 +97,10 @@ fn documented_commands_are_self_documenting_for_operators_and_agents() {
     let list = help(temp.path(), &["list", "--help"]);
     for phrase in [
         "SOURCE is required",
-        "temporary checkout",
+        "read-only checkout",
         "immutable",
         "--reference",
+        "--refresh",
         "with none, every discovered skill",
     ] {
         assert!(list.contains(phrase), "list help missing {phrase}");
@@ -108,8 +114,14 @@ fn documented_commands_are_self_documenting_for_operators_and_agents() {
         assert!(use_help.contains(phrase), "use help missing {phrase}");
     }
     let sync = help(temp.path(), &["sync", "--help"]);
-    for phrase in ["never installs", "does not change behavior"] {
+    for phrase in ["never installs", "does not change behavior", "--force"] {
         assert!(sync.contains(phrase), "sync help missing {phrase}");
+    }
+    let install = help(temp.path(), &["install", "--help"]);
+    assert!(install.contains("--force"), "install help missing --force");
+    let cache = help(temp.path(), &["cache", "--help"]);
+    for phrase in ["Normal:", "Example:", "SKILLS_CACHE_DIR"] {
+        assert!(cache.contains(phrase), "cache help missing {phrase}");
     }
     let doctor = help(temp.path(), &["doctor", "--help"]);
     assert!(!doctor.contains("unavailable inspection commands are reported"));

@@ -1,3 +1,4 @@
+use crate::cache::Cache;
 use sha2::{Digest, Sha256};
 use std::ffi::OsStr;
 use std::fs;
@@ -191,12 +192,14 @@ impl SourceSpec {
 
 /// Resolve a source for read-only discovery. Unlike `skills use`, this does
 /// not write a config or an install artifact. Remote sources are fetched at a
-/// full commit into a disposable checkout, so listing a branch never exposes
-/// a moving working tree to discovery.
+/// full commit into a read-only checkout, so listing a branch never exposes a
+/// moving working tree to discovery. Immutable checkouts are reused from the
+/// cache; resolved refs are reused for the cache TTL.
 pub fn prepare_discovery_source(
     input: &str,
     config_root: &Path,
     reference: Option<&str>,
+    cache: &Cache,
 ) -> Result<DiscoverySource, String> {
     let spec = SourceSpec::parse(input, config_root)?;
     if spec.kind == SourceKind::Path {
@@ -217,32 +220,57 @@ pub fn prepare_discovery_source(
         });
     }
 
-    let pin = resolve_git_pin(&spec, reference)?;
+    let pin = resolve_git_pin_cached(&spec, reference, cache)?;
     let revision = pin
         .version
         .strip_prefix("rev:")
         .ok_or_else(|| "Git source did not resolve to an immutable revision".to_string())?
         .to_string();
-    let temporary =
-        TempDir::new().map_err(|error| format!("cannot create source checkout: {error}"))?;
-    run_git_in(temporary.path(), &["init", "--quiet"])?;
-    run_git_in(temporary.path(), &["remote", "add", "origin", &spec.url()])?;
+    let url = spec.url();
+    if let Some(cached) = cache.cached_checkout(&url, &revision) {
+        return Ok(DiscoverySource {
+            version: pin.version,
+            spec,
+            root: cached,
+            track: Some(pin.track),
+            revision: Some(revision),
+            _temporary: None,
+        });
+    }
+
+    let base = cache.scratch_base()?;
+    let scratch = tempfile::Builder::new()
+        .prefix("skills-checkout-")
+        .tempdir_in(&base)
+        .map_err(|error| format!("cannot create source checkout: {error}"))?;
+    run_git_in(scratch.path(), &["init", "--quiet"])?;
+    run_git_in(scratch.path(), &["remote", "add", "origin", &url])?;
     run_git_in(
-        temporary.path(),
+        scratch.path(),
         &["fetch", "--quiet", "--depth", "1", "origin", &revision],
     )?;
     run_git_in(
-        temporary.path(),
+        scratch.path(),
         &["checkout", "--quiet", "--detach", "FETCH_HEAD"],
     )?;
-    let root = temporary.path().to_path_buf();
+
+    let mut scratch = Some(scratch);
+    let root = match cache.publish_checkout(&url, &revision, scratch.as_ref().unwrap().path()) {
+        Some(published) => {
+            if let Some(directory) = scratch.take() {
+                let _ = directory.keep();
+            }
+            published
+        }
+        None => scratch.as_ref().unwrap().path().to_path_buf(),
+    };
     Ok(DiscoverySource {
         version: pin.version,
         spec,
         root,
         track: Some(pin.track),
         revision: Some(revision),
-        _temporary: Some(temporary),
+        _temporary: scratch,
     })
 }
 
@@ -273,6 +301,28 @@ pub fn validate_subpath(value: Option<&str>) -> Result<String, String> {
         }
     }
     Ok(parts.join("/"))
+}
+
+/// Resolve a Git pin, reusing a recent cached resolution. A cached pin is only
+/// trusted for the cache TTL, and a forced refresh bypasses it entirely.
+pub fn resolve_git_pin_cached(
+    source: &SourceSpec,
+    reference: Option<&str>,
+    cache: &Cache,
+) -> Result<GitPin, String> {
+    if source.kind == SourceKind::Path {
+        return resolve_git_pin(source, reference);
+    }
+    let url = source.url();
+    if let Some(record) = cache.read_pin(&url, reference) {
+        return Ok(GitPin {
+            version: record.version,
+            track: record.track,
+        });
+    }
+    let pin = resolve_git_pin(source, reference)?;
+    cache.write_pin(&url, reference, &pin.version, &pin.track);
+    Ok(pin)
 }
 
 pub fn resolve_git_pin(source: &SourceSpec, reference: Option<&str>) -> Result<GitPin, String> {

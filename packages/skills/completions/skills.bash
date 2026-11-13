@@ -16,6 +16,9 @@ _skills() {
             ",$1")
                 cmd="skills"
                 ;;
+            skills,cache)
+                cmd="skills__subcmd__cache"
+                ;;
             skills,check)
                 cmd="skills__subcmd__validate"
                 ;;
@@ -60,6 +63,9 @@ _skills() {
                 ;;
             skills,validate)
                 cmd="skills__subcmd__validate"
+                ;;
+            skills__subcmd__help,cache)
+                cmd="skills__subcmd__help__subcmd__cache"
                 ;;
             skills__subcmd__help,completions)
                 cmd="skills__subcmd__help__subcmd__completions"
@@ -107,8 +113,22 @@ _skills() {
 
     case "${cmd}" in
         skills)
-            opts="-h -V --help --version list use upgrade install self-update doctor sync status remove prune validate check completions completion help"
+            opts="-h -V --help --version list use upgrade install self-update doctor sync status remove prune cache validate check completions completion help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 1 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        skills__subcmd__cache)
+            opts="-h --clean --json --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
@@ -157,8 +177,22 @@ _skills() {
             return 0
             ;;
         skills__subcmd__help)
-            opts="list use upgrade install self-update doctor sync status remove prune validate completions help"
+            opts="list use upgrade install self-update doctor sync status remove prune cache validate completions help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        skills__subcmd__help__subcmd__cache)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
@@ -353,7 +387,7 @@ _skills() {
             return 0
             ;;
         skills__subcmd__install)
-            opts="-h --env --global --path --locked --dry-run --accept-collision --help"
+            opts="-h --env --global --path --locked --dry-run --force --accept-collision --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -375,7 +409,7 @@ _skills() {
             return 0
             ;;
         skills__subcmd__list)
-            opts="-i -e -h --track --reference --subpath --include --exclude --tree --json --explain --help"
+            opts="-i -e -h --track --reference --subpath --include --exclude --tree --json --explain --refresh --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -509,7 +543,7 @@ _skills() {
             return 0
             ;;
         skills__subcmd__sync)
-            opts="-h --env --global --path --locked --help"
+            opts="-h --env --global --path --locked --force --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0

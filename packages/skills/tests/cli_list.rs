@@ -89,6 +89,7 @@ fn list_current_repository_ignores_virtualenv_and_developer_artifacts() {
 #[test]
 fn list_remote_file_git_source_fetches_revision_and_metadata_without_editing_config() {
     let repository = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
     let skill = repository.path().join("skills/demo");
     fs::create_dir_all(&skill).unwrap();
     fs::write(
@@ -128,6 +129,7 @@ fn list_remote_file_git_source_fetches_revision_and_metadata_without_editing_con
 
     let source = format!("git:file://{}", repository.path().display());
     let output = Command::new(env!("CARGO_BIN_EXE_skills"))
+        .env("SKILLS_CACHE_DIR", cache.path())
         .args(["list", &source, "--json", "--explain", "example"])
         .output()
         .expect("run skills");
@@ -165,6 +167,7 @@ fn list_remote_file_git_source_fetches_revision_and_metadata_without_editing_con
     .status
     .success());
     let github = Command::new(env!("CARGO_BIN_EXE_skills"))
+        .env("SKILLS_CACHE_DIR", cache.path())
         .env(
             "MISE_SKILLS_GITHUB_BASE_URL",
             format!("file://{}", github_base.path().display()),
@@ -183,6 +186,7 @@ fn list_remote_file_git_source_fetches_revision_and_metadata_without_editing_con
     assert_eq!(github_value["skills"][0]["aliases"][0], "example");
 
     let tracked = Command::new(env!("CARGO_BIN_EXE_skills"))
+        .env("SKILLS_CACHE_DIR", cache.path())
         .env(
             "MISE_SKILLS_GITHUB_BASE_URL",
             format!("file://{}", github_base.path().display()),
@@ -195,6 +199,78 @@ fn list_remote_file_git_source_fetches_revision_and_metadata_without_editing_con
     assert_eq!(tracked_value["track"], "master");
     assert_eq!(tracked_value["revision"], revision);
     assert!(!repository.path().join("mise.toml").exists());
+}
+
+#[test]
+fn list_caches_resolved_refs_and_refresh_bypasses_them() {
+    let repository = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let skill = repository.path().join("skills/demo");
+    fs::create_dir_all(&skill).unwrap();
+    assert!(git(repository.path(), &["init", "--quiet"])
+        .status
+        .success());
+    let commit = |message: &str, body: &str| {
+        fs::write(skill.join("SKILL.md"), body).unwrap();
+        assert!(git(repository.path(), &["add", "."]).status.success());
+        assert!(git(
+            repository.path(),
+            &[
+                "-c",
+                "user.name=skills-test",
+                "-c",
+                "user.email=skills-test@example.invalid",
+                "commit",
+                "--quiet",
+                "-m",
+                message,
+            ]
+        )
+        .status
+        .success());
+        String::from_utf8(git(repository.path(), &["rev-parse", "HEAD"]).stdout)
+            .unwrap()
+            .trim()
+            .to_string()
+    };
+    let first = commit("first", "---\nname: demo\ndescription: one\n---\n");
+    let source = format!("git:file://{}", repository.path().display());
+    let run = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_skills"))
+            .env("SKILLS_CACHE_DIR", cache.path())
+            .args(args)
+            .output()
+            .expect("run skills")
+    };
+
+    let listed = run(&["list", &source, "--json"]);
+    assert!(
+        listed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&listed.stderr)
+    );
+    let value: Value = serde_json::from_slice(&listed.stdout).unwrap();
+    assert_eq!(value["revision"], first);
+
+    let second = commit("second", "---\nname: demo\ndescription: two\n---\n");
+    assert_ne!(first, second);
+
+    // Within the TTL the cached resolution is reused, so the first revision is
+    // still reported even though the default branch moved.
+    let cached = run(&["list", &source, "--json"]);
+    assert!(cached.status.success());
+    let value: Value = serde_json::from_slice(&cached.stdout).unwrap();
+    assert_eq!(value["revision"], first);
+
+    // --refresh re-resolves the default branch and fetches the new revision.
+    let refreshed = run(&["list", &source, "--json", "--refresh"]);
+    assert!(
+        refreshed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&refreshed.stderr)
+    );
+    let value: Value = serde_json::from_slice(&refreshed.stdout).unwrap();
+    assert_eq!(value["revision"], second);
 }
 
 #[test]
@@ -213,4 +289,19 @@ fn list_handles_broken_pipe_without_panicking() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+#[test]
+fn list_accepts_flags_after_positional_selectors() {
+    let output = Command::new(env!("CARGO_BIN_EXE_skills"))
+        .args(["list", fixture().to_str().unwrap(), "missing", "--json"])
+        .output()
+        .expect("run skills");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: Value = serde_json::from_slice(&output.stdout).expect("JSON list output");
+    assert!(value["selection"].is_object());
 }

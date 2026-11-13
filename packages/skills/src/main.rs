@@ -1,9 +1,13 @@
+mod cache;
 mod config;
 mod git_exclude;
 mod lifecycle;
 mod source;
+mod style;
 
-use clap::{Args, CommandFactory, Parser, Subcommand};
+use cache::Cache;
+use clap::builder::styling::{AnsiColor, Effects, Styles};
+use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 use clap_complete::{
     generate,
     shells::{Bash, Fish, PowerShell, Zsh},
@@ -82,7 +86,10 @@ Configuration written by use:
   postinstall = ["skills sync --locked"]
 
   version is rev:<full-commit> for Git sources and tree-<sha256> for local
-  sources. track records update intent; install and sync never follow it.
+  sources. track records update intent; install and sync never follow it, and
+  `skills upgrade` re-resolves it. There is no version = "latest": mise
+  versions must be immutable, so "latest" is expressed as use (which records
+  the remote default branch as track) followed by upgrade and install.
   include is written only when selectors are given. --subpath writes
   source_subpath = "relative/directory". exclude = ["tag:experimental"] is
   supported but must be added to the tool table by hand. A global or --path
@@ -122,7 +129,10 @@ Ownership and safety:
   installations. Ownership is recorded per config directory under
   $MISE_STATE_DIR/skills/ (not per filename or environment).
   Unmanaged files, directories, symlinks, and changed managed links are
-  collisions: they are never overwritten or adopted. Link collisions are
+  collisions: they are never overwritten or adopted unless --force is given to
+  sync or install. --force removes a conflicting symlink, or moves a
+  conflicting file or directory aside to .skills-replaced-<name>-<timestamp>
+  before linking. Link collisions are
   reported as warnings and may not fail the command; confirm with status --json.
   Executable collisions are separate: install refuses a foreign `skills` on
   PATH or in mise ownership unless --accept-collision is given. No executable
@@ -141,15 +151,25 @@ Diagnostics:
   inspects the release and compatibility manifest. Set SKILLS_RELEASE_API or
   SKILLS_COMPATIBILITY_MANIFEST to local JSON fixtures for offline runs.
 
+Caching (list):
+  Remote sources are fetched at an immutable commit. Checkouts are cached
+  under $SKILLS_CACHE_DIR (else $MISE_CACHE_DIR/skills, else
+  ~/.cache/skills) and reused forever because a revision cannot change.
+  Resolved refs are cached for SKILLS_CACHE_TTL seconds (default 300).
+  --refresh re-resolves refs; SKILLS_NO_CACHE disables caching entirely;
+  `skills cache` reports or cleans the cache.
+
 Examples:
   skills list fullmeta-dev/skills --json --explain
-  skills list fullmeta-dev/skills --include 'skills/**' --exclude tag:experimental
+  skills list fullmeta-dev/skills 'skills/**' --refresh
   skills use fullmeta-dev/skills mise --agent pi --agent claude
   skills install && skills status --json
   skills upgrade && skills install
+  skills sync --force
   skills use --env development fullmeta-dev/skills mise --agent agents
   skills sync --locked
   skills doctor --global
+  skills cache --clean
   skills self-update --dry-run
   skills remove skills:fullmeta-dev/skills mise
   skills prune"#
@@ -163,7 +183,7 @@ struct Cli {
 enum Command {
     /// List discovered skills, optionally applying selectors.
     #[command(
-        after_help = "Normal: read-only discovery; no config is read or changed. SOURCE is required (path:DIR, a local directory, owner/repository, github:owner/repository, or git/https/ssh/file URL). Selectors are optional; with none, every discovered skill is listed. Remote sources are fetched at an immutable commit into a temporary checkout and removed after listing. Without --track or --reference, Git sources use the remote default branch. Text output lists names, descriptions, tags, aliases, source, and revision; --json adds artifact files and selector data, --tree renders artifact files, and --explain explains shadowing and selector decisions. Missing selectors are reported in text output (JSON carries them as data without a warning); they never fail selection. Failure: malformed metadata, unsafe links, or unavailable refs return non-zero without editing files. Example: skills list fullmeta-dev/skills --json --explain"
+        after_help = "Normal: read-only discovery; no config is read or changed. SOURCE is required (path:DIR, a local directory, owner/repository, github:owner/repository, or git/https/ssh/file URL). Selectors are optional; with none, every discovered skill is listed. Remote sources are fetched at an immutable commit into a read-only checkout that is cached by revision and reused. --refresh re-resolves refs instead of using the cached resolution; SKILLS_CACHE_TTL and SKILLS_NO_CACHE control the cache. Without --track or --reference, Git sources use the remote default branch. Text output lists names, descriptions, tags, aliases, source, and revision; --json adds artifact files and selector data, --tree renders artifact files, and --explain explains shadowing and selector decisions. Missing selectors are reported in text output (JSON carries them as data without a warning); they never fail selection. Failure: malformed metadata, unsafe links, or unavailable refs return non-zero without editing files. Example: skills list fullmeta-dev/skills --json --explain"
     )]
     List(ListArgs),
     /// Declare a source and selected skills, resolving its immutable pin.
@@ -178,7 +198,7 @@ enum Command {
     Upgrade(UpgradeArgs),
     /// Install selected configuration tools through normal mise, then sync links.
     #[command(
-        after_help = "Normal: runs normal mise install for every tool in the selected config (including non-skill tools), then directly runs locked sync to activate owned links. No positional tools are accepted. Source pins never move. --dry-run previews the mise installation and skips the direct sync; collision checks still run. --accept-collision bypasses only the public executable-owner check, never skill-link ownership. Failure: installation errors return non-zero and earlier installed artifacts may remain. Link collisions may only warn; inspect skills status --json. Scope: project by default, --global, --path PATH, or --env ENV. Example: skills install --env development"
+        after_help = "Normal: runs normal mise install for every tool in the selected config (including non-skill tools), then directly runs locked sync to activate owned links. No positional tools are accepted. Source pins never move. --dry-run previews the mise installation and skips the direct sync; collision checks still run. --accept-collision bypasses only the public executable-owner check, never skill-link ownership. --force replaces unmanaged or changed link targets instead of reporting them as collisions. Failure: installation errors return non-zero and earlier installed artifacts may remain. Link collisions may only warn; inspect skills status --json. Scope: project by default, --global, --path PATH, or --env ENV. Example: skills install --env development"
     )]
     Install(InstallArgs),
     /// Update the CLI and its compatible backend as one safe pair.
@@ -194,7 +214,7 @@ enum Command {
     Doctor(DoctorArgs),
     /// Converge the selected configuration without following update tracks.
     #[command(
-        after_help = "Normal: verifies installed immutable artifacts and converges links owned by this config root. It never installs, fetches updates, or follows tracks. It creates missing desired links, updates unchanged owned links, removes stale owned links, and writes ownership state. Missing or invalid artifacts and local-source drift return non-zero; run install, or use/upgrade then install. --locked is accepted for the generated postinstall hook; sync never resolves versions, so it does not change behavior. Unmanaged or changed targets are left untouched and reported as warnings. Scope: project by default, or --global/--path/--env. Example: skills sync --locked"
+        after_help = "Normal: verifies installed immutable artifacts and converges links owned by this config root. It never installs, fetches updates, or follows tracks. It creates missing desired links, updates unchanged owned links, removes stale owned links, and writes ownership state. Missing or invalid artifacts and local-source drift return non-zero; run install, or use/upgrade then install. --locked is accepted for the generated postinstall hook; sync never resolves versions, so it does not change behavior. Unmanaged or changed targets are left untouched and reported as warnings; --force replaces them instead (symlinks are removed, files and directories are moved aside). Scope: project by default, or --global/--path/--env. Example: skills sync --locked"
     )]
     Sync(SyncArgs),
     /// Show declared skill sources and their link state.
@@ -212,6 +232,11 @@ enum Command {
         after_help = "Normal: removes only stale links recorded for this config root; it never creates desired links and never changes declarations or installed artifacts. If desired links cannot be determined, links for still-declared tools are retained conservatively. Changed or unmanaged targets are retained with warnings. Failure: config/ownership or filesystem errors return non-zero. Scope: project by default, or --global/--path/--env. Example: skills prune --global"
     )]
     Prune(PruneArgs),
+    /// Inspect or clean the immutable source cache used by list.
+    #[command(
+        after_help = "Normal: read-only unless --clean is given. Reports the cache directory, the number of cached resolved refs and checkouts, and their size. --clean removes the whole cache directory (pins, checkouts, and scratch space); it never touches mise installations, config, or activated links. The directory is $SKILLS_CACHE_DIR, else $MISE_CACHE_DIR/skills, else ~/.cache/skills. --json emits the same fields as JSON. Failure: an unreadable or unwritable cache directory returns non-zero. Example: skills cache --clean"
+    )]
+    Cache(CacheArgs),
     /// Report strict Agent Skills conformance without blocking normal use.
     #[command(
         visible_alias = "check",
@@ -324,8 +349,10 @@ struct ListArgs {
     /// Explain shadowing, selector decisions, and missing selectors.
     #[arg(long)]
     explain: bool,
+    /// Re-resolve Git refs instead of using a cached resolution.
+    #[arg(long)]
+    refresh: bool,
     /// Additional selectors, equivalent to repeated `--include`.
-    #[arg(trailing_var_arg = true)]
     selectors: Vec<String>,
 }
 
@@ -338,7 +365,7 @@ struct UseArgs {
     /// Optional include selectors; omit to keep an existing selection policy.
     selectors: Vec<String>,
     /// Agent adapters to record in the declaration.
-    #[arg(long = "agent", required = true, num_args = 1..)]
+    #[arg(long = "agent", required = true, value_name = "AGENT")]
     agents: Vec<String>,
     /// Source-relative skill directory, validated against traversal.
     #[arg(long, alias = "source-subpath")]
@@ -375,6 +402,9 @@ struct InstallArgs {
     /// Preview normal mise installation without changing files; skips the direct sync.
     #[arg(long)]
     dry_run: bool,
+    /// Replace unmanaged or changed targets at desired link paths.
+    #[arg(long)]
+    force: bool,
     /// Explicitly accept an unrelated existing `skills` executable.
     #[arg(long)]
     accept_collision: bool,
@@ -429,6 +459,9 @@ struct SyncArgs {
     /// Accepted for the generated postinstall hook; sync never resolves versions.
     #[arg(long)]
     locked: bool,
+    /// Replace unmanaged or changed targets at desired link paths.
+    #[arg(long)]
+    force: bool,
 }
 
 #[derive(Debug, Args)]
@@ -454,6 +487,16 @@ struct RemoveArgs {
 struct PruneArgs {
     #[command(flatten)]
     scope: ScopeArgs,
+}
+
+#[derive(Debug, Args)]
+struct CacheArgs {
+    /// Remove every cached entry.
+    #[arg(long)]
+    clean: bool,
+    /// Emit machine-readable JSON.
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Debug, Args)]
@@ -516,12 +559,69 @@ struct StatusOutput {
     diagnostics: Vec<String>,
 }
 
+const STYLES: Styles = Styles::styled()
+    .header(AnsiColor::Green.on_default().effects(Effects::BOLD))
+    .usage(AnsiColor::Green.on_default().effects(Effects::BOLD))
+    .literal(AnsiColor::Cyan.on_default().effects(Effects::BOLD))
+    .placeholder(AnsiColor::Cyan.on_default())
+    .error(AnsiColor::Red.on_default().effects(Effects::BOLD))
+    .valid(AnsiColor::Green.on_default().effects(Effects::BOLD))
+    .invalid(AnsiColor::Yellow.on_default().effects(Effects::BOLD));
+
+/// Apply the shared palette to the whole command tree and emphasize section
+/// headings in every `after_help` block. clap strips the styling when output is
+/// not a terminal, so captured and piped help stays plain.
+fn typeset_help(command: clap::Command) -> clap::Command {
+    let command = command.styles(STYLES).mut_subcommands(typeset_help);
+    let styled = command
+        .get_after_help()
+        .map(|help| help.to_string())
+        .filter(|help| !help.is_empty())
+        .map(|help| typeset(&help));
+    match styled {
+        Some(styled) => command.after_help(styled),
+        None => command,
+    }
+}
+
+fn typeset(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 64);
+    for (index, line) in text.lines().enumerate() {
+        if index > 0 {
+            out.push('\n');
+        }
+        if is_help_heading(line) {
+            out.push_str("\x1b[1;36m");
+            out.push_str(line);
+            out.push_str("\x1b[0m");
+        } else {
+            out.push_str(line);
+        }
+    }
+    out
+}
+
+fn is_help_heading(line: &str) -> bool {
+    line.len() >= 3
+        && line.len() <= 48
+        && !line.starts_with(' ')
+        && line.ends_with(':')
+        && line.as_bytes().first().is_some_and(u8::is_ascii_uppercase)
+        && !line.contains("://")
+        && !line.chars().any(char::is_control)
+}
+
 fn main() -> ExitCode {
-    let cli = Cli::parse();
+    let command = typeset_help(Cli::command());
+    let matches = command.get_matches();
+    let cli = match Cli::from_arg_matches(&matches) {
+        Ok(cli) => cli,
+        Err(error) => error.exit(),
+    };
     let Some(command) = cli.command else {
         // Clap's generated help is intentionally the only output for a bare
         // invocation and is always side-effect free.
-        let mut command = Cli::command();
+        let mut command = typeset_help(Cli::command());
         if let Err(error) = command.print_help() {
             eprintln!("{error}");
             return ExitCode::from(2);
@@ -541,6 +641,7 @@ fn main() -> ExitCode {
         Command::Status(args) => run_status(args),
         Command::Remove(args) => run_remove(args),
         Command::Prune(args) => run_prune(args),
+        Command::Cache(args) => run_cache(args),
         Command::Validate(args) => run_validate(args),
         Command::Completions(args) => run_completions(args),
     }
@@ -551,10 +652,12 @@ fn run_list(args: ListArgs) -> ExitCode {
         Ok(path) => path,
         Err(error) => return fail(format!("cannot determine current directory: {error}")),
     };
+    let cache = Cache::from_env(args.refresh);
     let prepared = match prepare_discovery_source(
         &args.source,
         &config_root,
         args.reference.as_deref().or(args.track.as_deref()),
+        &cache,
     ) {
         Ok(source) => source,
         Err(error) => return fail(error),
@@ -562,7 +665,7 @@ fn run_list(args: ListArgs) -> ExitCode {
     let discovery = match discover_with_subpath(&prepared.root, args.subpath.as_deref()) {
         Ok(discovery) => discovery,
         Err(error) => {
-            eprintln!("error: {error}");
+            eprintln!("{}: {error}", style::error_label());
             return ExitCode::from(1);
         }
     };
@@ -604,13 +707,19 @@ fn run_list(args: ListArgs) -> ExitCode {
                     return if error.kind() == io::ErrorKind::BrokenPipe {
                         ExitCode::SUCCESS
                     } else {
-                        eprintln!("error: cannot write list output: {error}");
+                        eprintln!(
+                            "{}: cannot write list output: {error}",
+                            style::error_label()
+                        );
                         ExitCode::from(1)
                     };
                 }
             }
             Err(error) => {
-                eprintln!("error: cannot encode list as JSON: {error}");
+                eprintln!(
+                    "{}: cannot encode list as JSON: {error}",
+                    style::error_label()
+                );
                 return ExitCode::from(1);
             }
         }
@@ -618,7 +727,10 @@ fn run_list(args: ListArgs) -> ExitCode {
         return if error.kind() == io::ErrorKind::BrokenPipe {
             ExitCode::SUCCESS
         } else {
-            eprintln!("error: cannot write list output: {error}");
+            eprintln!(
+                "{}: cannot write list output: {error}",
+                style::error_label()
+            );
             ExitCode::from(1)
         };
     }
@@ -635,7 +747,7 @@ fn run_validate(args: ValidateArgs) -> ExitCode {
     let discovery = match discover_with_subpath(&source, args.subpath.as_deref()) {
         Ok(discovery) => discovery,
         Err(error) => {
-            eprintln!("error: {error}");
+            eprintln!("{}: {error}", style::error_label());
             return ExitCode::from(1);
         }
     };
@@ -649,24 +761,33 @@ fn run_validate(args: ValidateArgs) -> ExitCode {
         match serde_json::to_string_pretty(&output) {
             Ok(json) => println!("{json}"),
             Err(error) => {
-                eprintln!("error: cannot encode validation diagnostics as JSON: {error}");
+                eprintln!(
+                    "{}: cannot encode validation diagnostics as JSON: {error}",
+                    style::error_label()
+                );
                 return ExitCode::from(1);
             }
         }
     } else if output.diagnostics.is_empty() {
         println!(
-            "strict Agent Skills validation passed for {}",
-            output.source
+            "{} {}",
+            style::ok("strict Agent Skills validation passed for"),
+            style::path(&output.source)
         );
     } else {
-        println!("strict Agent Skills diagnostics for {}:", output.source);
+        println!(
+            "{} {}:",
+            style::warn_stdout("strict Agent Skills diagnostics for"),
+            style::path(&output.source)
+        );
         for diagnostic in &output.diagnostics {
             let level = match diagnostic.level {
                 DiagnosticLevel::Error => "error",
                 DiagnosticLevel::Warning => "warning",
             };
+            let level = style::level(level);
             if let Some(path) = &diagnostic.path {
-                println!("{level}: {path}: {}", diagnostic.message);
+                println!("{level}: {}: {}", style::path(path), diagnostic.message);
             } else {
                 println!("{level}: {}", diagnostic.message);
             }
@@ -698,7 +819,13 @@ fn run_completions(args: CompletionsArgs) -> ExitCode {
 fn run_use(args: UseArgs) -> ExitCode {
     match use_command(args) {
         Ok((key, version, path)) => {
-            println!("configured {key} at {version} in {}", path.display());
+            println!(
+                "{} {} at {} in {}",
+                style::ok("configured"),
+                style::bold(&key),
+                style::label(&version),
+                style::path(&path.display().to_string())
+            );
             ExitCode::SUCCESS
         }
         Err(error) => fail(error),
@@ -771,7 +898,11 @@ fn use_command(args: UseArgs) -> Result<(String, String, PathBuf), String> {
 fn run_upgrade(args: UpgradeArgs) -> ExitCode {
     match upgrade_command(args) {
         Ok((count, path)) => {
-            println!("upgraded {count} skill source(s) in {}", path.display());
+            println!(
+                "{} {count} skill source(s) in {}",
+                style::ok("upgraded"),
+                style::path(&path.display().to_string())
+            );
             ExitCode::SUCCESS
         }
         Err(error) => fail(error),
@@ -833,7 +964,7 @@ fn run_install(args: InstallArgs) -> ExitCode {
             ));
         }
         for collision in collisions {
-            eprintln!("warning: {collision}");
+            eprintln!("{}: {collision}", style::warning_label());
         }
         let output = run_normal_mise_install(&config, args.locked, args.dry_run)?;
         if !output.trim().is_empty() {
@@ -842,19 +973,15 @@ fn run_install(args: InstallArgs) -> ExitCode {
         if args.dry_run {
             return Ok(());
         }
-        let report = lifecycle::sync(&config, args.scope.is_global())?;
+        let report = lifecycle::sync(&config, args.scope.is_global(), args.force)?;
         println!(
-            "installed selected mise tools and synced {} link(s), removed {} link(s) in {}",
+            "{} {} link(s), removed {} link(s) in {}",
+            style::ok("installed selected mise tools and synced"),
             report.linked,
             report.removed,
-            config.path.display()
+            style::path(&config.path.display().to_string())
         );
-        for conflict in report.conflicts {
-            eprintln!("warning: {conflict}");
-        }
-        for warning in report.warnings {
-            eprintln!("warning: {warning}");
-        }
+        print_report_details(&report);
         Ok(())
     }) {
         Ok(()) => ExitCode::SUCCESS,
@@ -865,17 +992,26 @@ fn run_install(args: InstallArgs) -> ExitCode {
 fn run_doctor(args: DoctorArgs) -> ExitCode {
     let scope = args.scope.scope();
     match Config::load(&scope).map(|config| {
-        println!("config: {}", config.path.display());
         println!(
-            "environment: {}",
+            "{} {}",
+            style::label("config"),
+            style::path(&config.path.display().to_string())
+        );
+        println!(
+            "{} {}",
+            style::label("environment"),
             std::env::var("MISE_ENV").unwrap_or_else(|_| "default".into())
         );
         let collisions = collision_diagnostics(&config);
         if collisions.is_empty() {
-            println!("skills executable: no unrelated owner detected");
+            println!(
+                "{} {}",
+                style::label("skills executable"),
+                style::ok("no unrelated owner detected")
+            );
         } else {
             for collision in collisions {
-                println!("{collision}");
+                println!("{}", style::warn_stdout(&collision));
             }
         }
     }) {
@@ -919,13 +1055,17 @@ fn run_self_update(args: SelfUpdateArgs) -> ExitCode {
         Ok((version, path, dry_run)) => {
             if dry_run {
                 println!(
-                    "would update skills CLI and backend to {version} in {}",
-                    path.display()
+                    "{} skills CLI and backend to {} in {}",
+                    style::warn_stdout("would update"),
+                    style::label(&version),
+                    style::path(&path.display().to_string())
                 );
             } else {
                 println!(
-                    "updated skills CLI and backend to {version} in {}",
-                    path.display()
+                    "{} skills CLI and backend to {} in {}",
+                    style::ok("updated"),
+                    style::label(&version),
+                    style::path(&path.display().to_string())
                 );
             }
             ExitCode::SUCCESS
@@ -1392,23 +1532,34 @@ fn skills_on_path() -> Option<PathBuf> {
 
 fn run_sync(args: SyncArgs) -> ExitCode {
     match Config::load(&args.scope.scope()).and_then(|config| {
-        let report = lifecycle::sync(&config, args.scope.is_global())?;
+        let report = lifecycle::sync(&config, args.scope.is_global(), args.force)?;
         println!(
-            "synced {} link(s), removed {} link(s) in {}",
+            "{} {} link(s), removed {} link(s) in {}",
+            style::ok("synced"),
             report.linked,
             report.removed,
-            config.path.display()
+            style::path(&config.path.display().to_string())
         );
-        for conflict in report.conflicts {
-            eprintln!("warning: {conflict}");
-        }
-        for warning in report.warnings {
-            eprintln!("warning: {warning}");
-        }
+        print_report_details(&report);
         Ok(())
     }) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => fail(error),
+    }
+}
+
+/// Print the replaced/conflict/warning detail shared by sync, install, and
+/// prune. Replaced entries go to stdout with the rest of the report; conflicts
+/// and warnings are diagnostics on stderr.
+fn print_report_details(report: &lifecycle::SyncReport) {
+    for replaced in &report.replaced {
+        println!("{} {replaced}", style::warn_stdout("replaced:"));
+    }
+    for conflict in &report.conflicts {
+        eprintln!("{}: {conflict}", style::warning_label());
+    }
+    for warning in &report.warnings {
+        eprintln!("{}: {warning}", style::warning_label());
     }
 }
 
@@ -1428,19 +1579,42 @@ fn run_status(args: StatusArgs) -> ExitCode {
                 serde_json::to_string_pretty(&output).map_err(|error| error.to_string())?
             );
         } else {
-            println!("config\t{}", output.config);
-            println!("environment\t{}", output.environment);
-            for tool in &output.tools {
-                println!("{}\t{}", tool.key, tool.version);
-            }
-            for link in &output.links {
+            println!("{} {}", style::label("config"), style::path(&output.config));
+            println!("{} {}", style::label("environment"), output.environment);
+            if output.tools.is_empty() {
+                println!("{} none declared", style::label("tools"));
+            } else {
                 println!(
-                    "{}\t{}\t{}\t{}",
-                    link.adapter, link.skill, link.state, link.target
+                    "{}",
+                    style::heading(&format!("Tools ({})", output.tools.len()))
                 );
+                for tool in &output.tools {
+                    println!(
+                        "  {}  {}",
+                        style::bold(&tool.key),
+                        style::path(&tool.version)
+                    );
+                }
+            }
+            if output.links.is_empty() {
+                println!("{} none", style::label("links"));
+            } else {
+                println!(
+                    "{}",
+                    style::heading(&format!("Links ({})", output.links.len()))
+                );
+                for link in &output.links {
+                    println!(
+                        "  {}  {}  {}  {}",
+                        style::label(&link.adapter),
+                        style::bold(&link.skill),
+                        link_state(&link.state),
+                        style::path(&link.target)
+                    );
+                }
             }
             for diagnostic in &output.diagnostics {
-                eprintln!("warning: {diagnostic}");
+                eprintln!("{}: {diagnostic}", style::warning_label());
             }
         }
         Ok(())
@@ -1450,13 +1624,28 @@ fn run_status(args: StatusArgs) -> ExitCode {
     }
 }
 
+fn link_state(state: &str) -> String {
+    match state {
+        "active" => style::ok(state),
+        "conflict" | "unowned" => style::warn_stdout(state),
+        _ => style::path(state),
+    }
+}
+
 fn run_remove(args: RemoveArgs) -> ExitCode {
     match remove_command(args) {
         Ok((removed, path)) => {
             if removed {
-                println!("removed skill declaration(s) in {}", path.display());
+                println!(
+                    "{} skill declaration(s) in {}",
+                    style::ok("removed"),
+                    style::path(&path.display().to_string())
+                );
             } else {
-                println!("no skill declaration changed in {}", path.display());
+                println!(
+                    "no skill declaration changed in {}",
+                    style::path(&path.display().to_string())
+                );
             }
             ExitCode::SUCCESS
         }
@@ -1478,13 +1667,8 @@ fn remove_command(args: RemoveArgs) -> Result<(bool, PathBuf), String> {
     let tool_still_declared = config::tool_info(&config.document, &key)?.is_some();
     let remaining_reference = has_remaining_artifact_reference(&config, &removed_tool)?;
     config.save_if_changed(&before)?;
-    let report = lifecycle::sync(&config, args.scope.is_global())?;
-    for conflict in report.conflicts {
-        eprintln!("warning: {conflict}");
-    }
-    for warning in report.warnings {
-        eprintln!("warning: {warning}");
-    }
+    let report = lifecycle::sync(&config, args.scope.is_global(), false)?;
+    print_report_details(&report);
 
     // Partial selector removal leaves the declaration (and therefore its
     // artifact) in use. Even after removing the whole table, keep the normal
@@ -1584,20 +1768,76 @@ fn run_prune(args: PruneArgs) -> ExitCode {
     match Config::load(&args.scope.scope()).and_then(|config| {
         let report = lifecycle::prune(&config, args.scope.is_global())?;
         println!(
-            "pruned {} stale link(s) in {}",
+            "{} {} stale link(s) in {}",
+            style::ok("pruned"),
             report.removed,
-            config.path.display()
+            style::path(&config.path.display().to_string())
         );
-        for conflict in report.conflicts {
-            eprintln!("warning: {conflict}");
-        }
-        for warning in report.warnings {
-            eprintln!("warning: {warning}");
-        }
+        print_report_details(&report);
         Ok(())
     }) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => fail(error),
+    }
+}
+
+fn run_cache(args: CacheArgs) -> ExitCode {
+    let cache = Cache::from_env(false);
+    if args.clean {
+        let before = match cache.clean() {
+            Ok(stats) => stats,
+            Err(error) => return fail(error),
+        };
+        if args.json {
+            match serde_json::to_string_pretty(&before) {
+                Ok(json) => println!("{json}"),
+                Err(error) => return fail(format!("cannot encode cache stats: {error}")),
+            }
+        } else {
+            println!(
+                "{} {} entries ({}) from {}",
+                style::ok("cleaned"),
+                before.pins + before.checkouts,
+                human_bytes(before.bytes),
+                style::path(before.dir.as_deref().unwrap_or("unknown"))
+            );
+        }
+        return ExitCode::SUCCESS;
+    }
+    let stats = cache.stats();
+    if args.json {
+        match serde_json::to_string_pretty(&stats) {
+            Ok(json) => println!("{json}"),
+            Err(error) => return fail(format!("cannot encode cache stats: {error}")),
+        }
+    } else {
+        match &stats.dir {
+            Some(dir) => println!("{} {}", style::label("cache dir"), style::path(dir)),
+            None => println!("{} disabled", style::label("cache dir")),
+        }
+        println!(
+            "{} {} refs, {} checkouts",
+            style::label("entries"),
+            stats.pins,
+            stats.checkouts
+        );
+        println!("{} {}", style::label("size"), human_bytes(stats.bytes));
+    }
+    ExitCode::SUCCESS
+}
+
+fn human_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 4] = ["B", "KiB", "MiB", "GiB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} B")
+    } else {
+        format!("{value:.1} {}", UNITS[unit])
     }
 }
 
@@ -1612,7 +1852,7 @@ fn same_source(left: &SourceSpec, right: &SourceSpec) -> bool {
 }
 
 fn fail(error: String) -> ExitCode {
-    eprintln!("error: {error}");
+    eprintln!("{}: {error}", style::error_label());
     ExitCode::from(1)
 }
 
@@ -1645,18 +1885,43 @@ fn print_text(
 ) -> io::Result<()> {
     let mut text = String::new();
     use std::fmt::Write as _;
-    writeln!(text, "Source: {}", terminal_text(&output.source))
-        .expect("writing String cannot fail");
-    writeln!(text, "Version: {}", terminal_text(&output.version))
-        .expect("writing String cannot fail");
+    writeln!(
+        text,
+        "{} {}",
+        style::label("source"),
+        style::bold(&terminal_text(&output.source))
+    )
+    .expect("writing String cannot fail");
+    writeln!(
+        text,
+        "{} {}",
+        style::label("version"),
+        style::path(&terminal_text(&output.version))
+    )
+    .expect("writing String cannot fail");
     if let Some(revision) = &output.revision {
-        writeln!(text, "Revision: {}", terminal_text(revision))
-            .expect("writing String cannot fail");
+        writeln!(
+            text,
+            "{} {}",
+            style::label("revision"),
+            style::path(&terminal_text(revision))
+        )
+        .expect("writing String cannot fail");
     }
     if let Some(track) = &output.track {
-        writeln!(text, "Track: {}", terminal_text(track)).expect("writing String cannot fail");
+        writeln!(text, "{} {}", style::label("track"), terminal_text(track))
+            .expect("writing String cannot fail");
     }
     writeln!(text).expect("writing String cannot fail");
+    writeln!(
+        text,
+        "{}",
+        style::heading(&format!("Skills ({})", output.skills.len()))
+    )
+    .expect("writing String cannot fail");
+    if output.skills.is_empty() {
+        writeln!(text, "  {}", style::path("none selected")).expect("writing String cannot fail");
+    }
     for skill in &output.skills {
         let tags = if skill.tags.is_empty() {
             "none".to_string()
@@ -1670,29 +1935,51 @@ fn print_text(
         };
         writeln!(
             text,
-            "{}  {}",
-            terminal_text(&skill.name),
-            terminal_text(&skill.path)
+            "  {}  {}",
+            style::bold(&terminal_text(&skill.name)),
+            style::path(&terminal_text(&skill.path))
         )
         .expect("writing String cannot fail");
-        writeln!(text, "  Description: {}", terminal_text(&skill.description))
+        writeln!(text, "    {}", terminal_text(&skill.description))
             .expect("writing String cannot fail");
-        writeln!(text, "  Tags: {}", terminal_text(&tags)).expect("writing String cannot fail");
-        writeln!(text, "  Aliases: {}", terminal_text(&aliases))
-            .expect("writing String cannot fail");
+        writeln!(
+            text,
+            "    {} {}",
+            style::label("tags:"),
+            terminal_text(&tags)
+        )
+        .expect("writing String cannot fail");
+        writeln!(
+            text,
+            "    {} {}",
+            style::label("aliases:"),
+            terminal_text(&aliases)
+        )
+        .expect("writing String cannot fail");
         if tree {
             for file in &skill.files {
-                writeln!(text, "  File: {}", terminal_text(file))
+                writeln!(text, "    {}", style::path(&terminal_text(file)))
                     .expect("writing String cannot fail");
             }
         }
     }
+    writeln!(
+        text,
+        "\n{} {} selected, {} excluded, {} shadowed, {} diagnostics",
+        style::label("summary"),
+        output.skills.len(),
+        output.selection.excluded.len(),
+        output.shadowed.len(),
+        output.diagnostics.len()
+    )
+    .expect("writing String cannot fail");
     if explain {
-        writeln!(text, "\nExplanation:").expect("writing String cannot fail");
+        writeln!(text, "\n{}", style::heading("Explain")).expect("writing String cannot fail");
         if output.shadowed.is_empty() {
-            writeln!(text, "  Shadowed: none").expect("writing String cannot fail");
+            writeln!(text, "  {} none", style::label("shadowed"))
+                .expect("writing String cannot fail");
         } else {
-            writeln!(text, "  Shadowed:").expect("writing String cannot fail");
+            writeln!(text, "  {}", style::label("shadowed")).expect("writing String cannot fail");
             for shadow in &output.shadowed {
                 writeln!(
                     text,
@@ -1743,7 +2030,8 @@ fn print_text(
     for selector in &selection.missing_includes {
         if !explain {
             eprintln!(
-                "warning: missing include selector: {}",
+                "{}: missing include selector: {}",
+                style::warning_label(),
                 terminal_text(selector)
             );
         }
@@ -1751,7 +2039,8 @@ fn print_text(
     for selector in &selection.missing_excludes {
         if !explain {
             eprintln!(
-                "warning: missing exclude selector: {}",
+                "{}: missing exclude selector: {}",
+                style::warning_label(),
                 terminal_text(selector)
             );
         }
@@ -1761,6 +2050,7 @@ fn print_text(
             DiagnosticLevel::Error => "error",
             DiagnosticLevel::Warning => "warning",
         };
+        let level = style::level(level);
         if let Some(path) = &diagnostic.path {
             eprintln!(
                 "{level}: {}: {}",

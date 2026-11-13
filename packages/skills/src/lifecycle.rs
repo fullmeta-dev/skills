@@ -3,7 +3,7 @@ use crate::source::{canonical_version, local_pin, validate_subpath, SourceKind, 
 use fslock::LockFile;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use skills::discover_with_subpath;
+use skills::{discover_with_subpath, Diagnostic, DiagnosticLevel, Skill};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -59,6 +59,7 @@ pub struct LinkStatus {
 pub struct SyncReport {
     pub linked: usize,
     pub removed: usize,
+    pub replaced: Vec<String>,
     pub conflicts: Vec<String>,
     pub warnings: Vec<String>,
 }
@@ -151,15 +152,15 @@ pub fn validate_agent(value: &str) -> Result<(), String> {
     Adapter::parse(value).map(|_| ())
 }
 
-pub fn sync(config: &Config, global: bool) -> Result<SyncReport, String> {
+pub fn sync(config: &Config, global: bool, force: bool) -> Result<SyncReport, String> {
     // Serialize this config root's lifecycle so concurrent syncs cannot
     // interleave link, manifest, and git-exclude writes. Released on return.
     let _lock = lock_config_root(&config.root)?;
     let manifest = load_manifest(&config.root, global)?;
-    let desired = desired_links(config, global)?;
+    let (desired, warnings) = desired_links(config, global)?;
     let snapshots = link_snapshots(&manifest, &desired);
     let manifest_snapshot = snapshot_manifest_file(&config.root)?;
-    match sync_changes(config, global, manifest, desired) {
+    match sync_changes(config, global, manifest, desired, force, warnings) {
         Ok(report) => Ok(report),
         Err(error) => Err(rollback_error(error, &snapshots, &manifest_snapshot)),
     }
@@ -170,8 +171,11 @@ fn sync_changes(
     global: bool,
     mut manifest: OwnershipManifest,
     desired: BTreeMap<LinkKey, DesiredLink>,
+    force: bool,
+    warnings: Vec<String>,
 ) -> Result<SyncReport, String> {
     let mut report = SyncReport::default();
+    report.warnings = warnings;
     let previous = manifest.links.clone();
     let previous_roots: Vec<PathBuf> = manifest
         .git_exclude_roots
@@ -210,11 +214,15 @@ fn sync_changes(
 
     for (key, desired_link) in &desired {
         let old = old_links.get(key);
-        match converge_link(desired_link, old) {
+        match converge_link(desired_link, old, force) {
             Ok(ConvergeResult::Created) => report.linked += 1,
             Ok(ConvergeResult::Updated) => {
                 report.removed += 1;
                 report.linked += 1;
+            }
+            Ok(ConvergeResult::Replaced(message)) => {
+                report.linked += 1;
+                report.replaced.push(message);
             }
             Ok(ConvergeResult::Unchanged) => {}
             Ok(ConvergeResult::Conflict(message)) => {
@@ -289,6 +297,7 @@ fn prune_changes(
     desired_keys: BTreeSet<LinkKey>,
 ) -> Result<SyncReport, String> {
     let mut report = SyncReport::default();
+    report.warnings = desired_result.warnings.clone();
     let previous = manifest.links.clone();
     let previous_roots: Vec<PathBuf> = manifest
         .git_exclude_roots
@@ -351,6 +360,7 @@ pub fn status(config: &Config, global: bool) -> Result<StatusReport, String> {
     let desired_result = desired_links_report(config, global);
     let mut links = Vec::new();
     let mut diagnostics = desired_result.diagnostics;
+    diagnostics.extend(desired_result.warnings);
     let mut seen = BTreeSet::new();
 
     for link in manifest.links {
@@ -651,34 +661,44 @@ fn canonical_root(root: &Path) -> PathBuf {
     fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf())
 }
 
-fn desired_links(config: &Config, global: bool) -> Result<BTreeMap<LinkKey, DesiredLink>, String> {
+fn desired_links(
+    config: &Config,
+    global: bool,
+) -> Result<(BTreeMap<LinkKey, DesiredLink>, Vec<String>), String> {
     let report = desired_links_report(config, global);
     if !report.diagnostics.is_empty() {
         return Err(report.diagnostics.join("; "));
     }
-    Ok(report.links)
+    Ok((report.links, report.warnings))
 }
 
 struct DesiredReport {
     links: BTreeMap<LinkKey, DesiredLink>,
     diagnostics: Vec<String>,
+    warnings: Vec<String>,
 }
 
 fn desired_links_report(config: &Config, global: bool) -> DesiredReport {
     let mut links = BTreeMap::new();
     let mut diagnostics = Vec::new();
+    let mut warnings = Vec::new();
     let tools = match crate::config::skill_tools(&config.document) {
         Ok(tools) => tools,
         Err(error) => {
             diagnostics.push(error);
-            return DesiredReport { links, diagnostics };
+            return DesiredReport {
+                links,
+                diagnostics,
+                warnings,
+            };
         }
     };
     for tool in tools {
         let result = desired_tool_links(config, global, &tool);
         match result {
             Ok(tool_links) => {
-                for desired in tool_links {
+                warnings.extend(tool_links.warnings);
+                for desired in tool_links.links {
                     let key = LinkKey {
                         adapter: desired.adapter.id().to_string(),
                         target: desired.target.clone(),
@@ -698,14 +718,14 @@ fn desired_links_report(config: &Config, global: bool) -> DesiredReport {
             Err(error) => diagnostics.push(error),
         }
     }
-    DesiredReport { links, diagnostics }
+    DesiredReport {
+        links,
+        diagnostics,
+        warnings,
+    }
 }
 
-fn desired_tool_links(
-    config: &Config,
-    global: bool,
-    tool: &ToolInfo,
-) -> Result<Vec<DesiredLink>, String> {
+fn desired_tool_links(config: &Config, global: bool, tool: &ToolInfo) -> Result<ToolLinks, String> {
     let source = SourceSpec::from_declared(&tool.source, &config.root, Some(&tool.key))?;
     let version = canonical_version(&tool.version, source.kind)?;
     if source.kind == SourceKind::Path {
@@ -731,13 +751,27 @@ fn desired_tool_links(
     let selection_root = (!subpath.is_empty()).then(|| Path::new(subpath.as_str()));
     let discovery = discover_with_subpath(&artifact.path, selection_root)
         .map_err(|error| format!("cannot discover {}: {error}", tool.key))?;
-    if discovery.has_errors() {
-        return Err(format!(
-            "cannot discover {}: source contains errors",
-            tool.key
+    let selection = discovery.select(&tool.include, &tool.exclude);
+    // A malformed skill elsewhere in a third-party source must not block
+    // activating the selected skills. Only errors that touch the selection, or
+    // the source as a whole, are fatal; the rest are reported as warnings.
+    let mut warnings = Vec::new();
+    for diagnostic in &discovery.diagnostics {
+        if diagnostic.level != DiagnosticLevel::Error {
+            continue;
+        }
+        if diagnostic_touches_selection(diagnostic, &selection.selected) {
+            return Err(format!(
+                "cannot discover {}: selected skills contain errors",
+                tool.key
+            ));
+        }
+        warnings.push(format!(
+            "{}: unselected source error: {}",
+            tool.key,
+            describe_diagnostic(diagnostic)
         ));
     }
-    let selection = discovery.select(&tool.include, &tool.exclude);
     let mut adapters = BTreeSet::new();
     for agent in &tool.agents {
         adapters.insert(Adapter::parse(agent)?);
@@ -780,7 +814,34 @@ fn desired_tool_links(
             });
         }
     }
-    Ok(result)
+    Ok(ToolLinks {
+        links: result,
+        warnings,
+    })
+}
+
+struct ToolLinks {
+    links: Vec<DesiredLink>,
+    warnings: Vec<String>,
+}
+
+/// Whether an error-level diagnostic should block activating this selection.
+/// A diagnostic without a path, or one inside a selected skill directory,
+/// affects what we are about to activate; anything else is only reported.
+fn diagnostic_touches_selection(diagnostic: &Diagnostic, selected: &[Skill]) -> bool {
+    let Some(path) = diagnostic.path.as_deref() else {
+        return true;
+    };
+    selected
+        .iter()
+        .any(|skill| path == skill.path || path.starts_with(&format!("{}/", skill.path)))
+}
+
+fn describe_diagnostic(diagnostic: &Diagnostic) -> String {
+    match &diagnostic.path {
+        Some(path) => format!("{path}: {}", diagnostic.message),
+        None => diagnostic.message.clone(),
+    }
 }
 
 fn validate_skill_target(name: &str) -> Result<(), String> {
@@ -817,10 +878,15 @@ enum ConvergeResult {
     Created,
     Updated,
     Unchanged,
+    Replaced(String),
     Conflict(String),
 }
 
-fn converge_link(desired: &DesiredLink, old: Option<&OwnedLink>) -> Result<ConvergeResult, String> {
+fn converge_link(
+    desired: &DesiredLink,
+    old: Option<&OwnedLink>,
+    force: bool,
+) -> Result<ConvergeResult, String> {
     let existing = symlink_target(&desired.target);
     match existing {
         TargetState::Missing => {
@@ -831,14 +897,31 @@ fn converge_link(desired: &DesiredLink, old: Option<&OwnedLink>) -> Result<Conve
                 ConvergeResult::Created
             })
         }
-        TargetState::Other => Ok(ConvergeResult::Conflict(format!(
-            "conflict at {}: existing unmanaged target was left untouched",
-            desired.target.display()
-        ))),
+        TargetState::Other => {
+            if force {
+                let backup = back_up_target(&desired.target)?;
+                create_link(desired)?;
+                Ok(ConvergeResult::Replaced(format!(
+                    "replaced existing target {}; previous contents moved to {}",
+                    desired.target.display(),
+                    backup.display()
+                )))
+            } else {
+                Ok(ConvergeResult::Conflict(format!(
+                    "conflict at {}: existing unmanaged target was left untouched",
+                    desired.target.display()
+                )))
+            }
+        }
         TargetState::Symlink(actual) => {
             if actual == desired.link {
                 if old.is_some() {
                     Ok(ConvergeResult::Unchanged)
+                } else if force {
+                    Ok(ConvergeResult::Replaced(format!(
+                        "adopted existing unmanaged link at {}",
+                        desired.target.display()
+                    )))
                 } else {
                     Ok(ConvergeResult::Conflict(format!(
                         "conflict at {}: existing unmanaged symlink was left untouched",
@@ -846,7 +929,7 @@ fn converge_link(desired: &DesiredLink, old: Option<&OwnedLink>) -> Result<Conve
                     )))
                 }
             } else if let Some(old) = old {
-                if actual == old.link {
+                if actual == old.link || force {
                     remove_link(&desired.target)?;
                     create_link(desired)?;
                     Ok(ConvergeResult::Updated)
@@ -856,6 +939,13 @@ fn converge_link(desired: &DesiredLink, old: Option<&OwnedLink>) -> Result<Conve
                         desired.target.display()
                     )))
                 }
+            } else if force {
+                remove_link(&desired.target)?;
+                create_link(desired)?;
+                Ok(ConvergeResult::Replaced(format!(
+                    "replaced existing unmanaged symlink at {}",
+                    desired.target.display()
+                )))
             } else {
                 Ok(ConvergeResult::Conflict(format!(
                     "conflict at {}: existing unmanaged symlink was left untouched",
@@ -864,6 +954,33 @@ fn converge_link(desired: &DesiredLink, old: Option<&OwnedLink>) -> Result<Conve
             }
         }
     }
+}
+
+/// Move a conflicting file or directory aside instead of deleting it. The
+/// backup is hidden and timestamped so it cannot be mistaken for a skill, and
+/// a numeric suffix is added if the same target is replaced twice in one
+/// second.
+fn back_up_target(target: &Path) -> Result<PathBuf, String> {
+    let parent = target
+        .parent()
+        .ok_or_else(|| format!("cannot back up {}", target.display()))?;
+    let name = target
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("target");
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    let mut candidate = parent.join(format!(".skills-replaced-{name}-{stamp}"));
+    let mut counter = 1;
+    while candidate.exists() {
+        candidate = parent.join(format!(".skills-replaced-{name}-{stamp}.{counter}"));
+        counter += 1;
+    }
+    fs::rename(target, &candidate)
+        .map_err(|error| format!("cannot move {} aside: {error}", target.display()))?;
+    Ok(candidate)
 }
 
 fn remove_owned(link: &OwnedLink) -> Result<bool, String> {
@@ -1237,6 +1354,28 @@ fn artifact_skill_paths(path: &Path) -> Result<BTreeSet<String>, String> {
     Ok(paths)
 }
 
+/// Reproduce mise's install-directory slug: lowercase, every run of
+/// non-alphanumeric characters collapsed to one `-`, with leading and
+/// trailing separators trimmed. mise applies this to `<backend>-<tool>`, so
+/// `git:` keys containing `.` or `_` only match when this is exact.
+fn mise_install_name(value: &str) -> String {
+    let mut slug = String::with_capacity(value.len());
+    let mut separator = false;
+    for character in value.chars() {
+        if character.is_ascii_alphanumeric() {
+            slug.push(character.to_ascii_lowercase());
+            separator = false;
+        } else if !separator && !slug.is_empty() {
+            slug.push('-');
+            separator = true;
+        }
+    }
+    while slug.ends_with('-') {
+        slug.pop();
+    }
+    slug
+}
+
 fn find_artifact(key: &str, version: &str) -> Result<Option<Artifact>, String> {
     let installs = std::env::var_os("MISE_INSTALLS_DIR")
         .map(PathBuf::from)
@@ -1248,25 +1387,21 @@ fn find_artifact(key: &str, version: &str) -> Result<Option<Artifact>, String> {
                 .map(|path| PathBuf::from(path).join(".local/share/mise/installs"))
         })
         .ok_or_else(|| "cannot determine mise installs directory".to_string())?;
-    let tool_name = format!(
+    let tool_name = mise_install_name(&format!(
         "skills-{}",
-        key.strip_prefix("skills:")
-            .unwrap_or(key)
-            .chars()
-            .map(|character| {
-                if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
-                    character
-                } else {
-                    '-'
-                }
-            })
-            .collect::<String>()
-    );
+        key.strip_prefix("skills:").unwrap_or(key)
+    ));
     let mut candidates = Vec::new();
-    candidates.push(installs.join(&tool_name).join(version));
-    // mise stores a Git version containing `:` as a filesystem-safe `-`,
-    // e.g. the declared `rev:<commit>` becomes `rev-<commit>`.
-    candidates.push(installs.join(&tool_name).join(version.replace(':', "-")));
+    // mise stores a Git version containing `:` as a filesystem-safe `-` (the
+    // declared `rev:<commit>` becomes `rev-<commit>`) and slugs the version
+    // with the same rules as the tool name.
+    for candidate in [
+        version.to_string(),
+        version.replace(':', "-"),
+        mise_install_name(version),
+    ] {
+        candidates.push(installs.join(&tool_name).join(candidate));
+    }
     if let Some(raw) = version.strip_prefix("rev:") {
         candidates.push(installs.join(&tool_name).join(raw));
     }
@@ -1611,6 +1746,36 @@ mod tests {
         let (_temp, artifact, source, version, _tree) = manifest_fixture();
         let error = verify_artifact(&artifact, &version, &source).unwrap_err();
         assert!(error.contains("missing its backend manifest"), "{error}");
+    }
+
+    #[test]
+    fn slugs_like_mise_install_directories() {
+        assert_eq!(
+            mise_install_name("skills-github.com/owner/repo"),
+            "skills-github-com-owner-repo"
+        );
+        assert_eq!(mise_install_name("skills-a.b_c-d+e"), "skills-a-b-c-d-e");
+        assert_eq!(mise_install_name("skills-a..b"), "skills-a-b");
+        assert_eq!(mise_install_name("skills-.a."), "skills-a");
+        assert_eq!(mise_install_name("skills-A.B"), "skills-a-b");
+    }
+
+    #[test]
+    fn finds_git_artifacts_under_mise_slugged_names() {
+        let temp = TempDir::new().unwrap();
+        let installs = temp.path().join("installs");
+        let revision = "abcdef0123456789abcdef0123456789abcdef01";
+        let directory = installs
+            .join("skills-github-com-owner-repo")
+            .join(format!("rev-{revision}"));
+        fs::create_dir_all(&directory).unwrap();
+        std::env::set_var("MISE_INSTALLS_DIR", &installs);
+        let found = find_artifact("github.com/owner/repo", &format!("rev:{revision}"));
+        std::env::remove_var("MISE_INSTALLS_DIR");
+        assert_eq!(
+            found.unwrap().unwrap().path,
+            fs::canonicalize(&directory).unwrap()
+        );
     }
 
     #[test]

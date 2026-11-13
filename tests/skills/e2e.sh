@@ -89,6 +89,24 @@ printf 'environment-specific config target\n'
 [[ -f "$PROJECT_DIR/mise.dev.toml" ]]
 "$CLI_BIN" install --path "$PROJECT_DIR/mise.toml" --env dev
 
+printf 'git source keyed by a dotted repository name\n'
+GIT_SOURCE="$WORK_DIR/git-source.v1"
+mkdir -p "$GIT_SOURCE/skills/gitdemo"
+cat > "$GIT_SOURCE/skills/gitdemo/SKILL.md" <<'EOF'
+---
+name: gitdemo
+description: E2E git source skill.
+---
+# Git demo
+EOF
+git -C "$GIT_SOURCE" init -q
+git -C "$GIT_SOURCE" add .
+git -C "$GIT_SOURCE" -c user.email=e2e@example.invalid -c user.name=e2e commit -qm git-source
+"$CLI_BIN" use --path "$PROJECT_DIR/mise.toml" "git:file://$GIT_SOURCE" gitdemo --agent agents
+"$CLI_BIN" install --path "$PROJECT_DIR/mise.toml"
+[[ -L "$PROJECT_DIR/.agents/skills/gitdemo" ]]
+"$CLI_BIN" status --path "$PROJECT_DIR/mise.toml" --json | grep -Fq '"active"'
+
 printf 'executable collision is diagnosed without normal mise install\n'
 FOREIGN_BIN="$WORK_DIR/foreign-bin"
 mkdir -p "$FOREIGN_BIN"
