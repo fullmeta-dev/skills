@@ -39,6 +39,11 @@ version = "<release>"
 bin = "skills"
 ```
 
+For a private repository, set `GITHUB_TOKEN` (or `MISE_GITHUB_TOKEN`) and
+`use_versions_host = false`, so mise and `self-update` query GitHub directly
+for the release. Use SSH URLs for the Git-cloned plugin and skill sources when
+HTTPS Git credentials are unavailable.
+
 Mise shell activation is required for the global binary to be on `PATH`.
 Then browse a source before selecting anything. `list` is read-only and
 prints each skill's name, description, tags, aliases, artifact files, source,

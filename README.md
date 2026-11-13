@@ -24,6 +24,23 @@ version = "<release>"
 bin = "skills"
 ```
 
+For a private skills repository, mise cannot use the public versions host and
+`self-update` needs a token for the release API and assets:
+
+```sh
+export GITHUB_TOKEN=<token>   # or MISE_GITHUB_TOKEN / GH_TOKEN
+```
+
+```toml
+[settings]
+use_versions_host = false
+```
+
+The backend plugin and skill sources are cloned with Git. If HTTPS Git
+credentials are unavailable, use an SSH URL for those
+(`git@github.com:owner/repository.git`); `github:` sources and the CLI release
+install use HTTPS and the token.
+
 Mise shell activation is required for the global binary to be on `PATH`. Then
 install it through normal mise and select skills in a project. Browse a source
 first; `list` is read-only and shows names, descriptions, tags, aliases, files,

@@ -908,6 +908,10 @@ struct LatestRelease {
 struct ReleaseAsset {
     name: String,
     browser_download_url: String,
+    /// The API asset URL. Private repositories serve the asset only from here,
+    /// with an `application/octet-stream` accept header.
+    #[serde(default)]
+    url: String,
 }
 
 fn run_self_update(args: SelfUpdateArgs) -> ExitCode {
@@ -1075,29 +1079,58 @@ fn load_compatibility_manifest() -> Result<CompatibilityManifest, String> {
                 release.tag_name
             )
         })?;
-    parse_compatibility_manifest(&read_manifest_location(&asset.browser_download_url)?)
+    // A private repository serves the asset only from the API URL with an
+    // octet-stream accept header; a public one works from either.
+    let location = if github_token().is_some() && !asset.url.is_empty() {
+        asset.url.as_str()
+    } else {
+        asset.browser_download_url.as_str()
+    };
+    parse_compatibility_manifest(&read_manifest_location(location)?)
+}
+
+fn github_token() -> Option<String> {
+    ["MISE_GITHUB_TOKEN", "GITHUB_TOKEN", "GH_TOKEN"]
+        .iter()
+        .find_map(|key| std::env::var(key).ok().filter(|value| !value.is_empty()))
+}
+
+/// Download a GitHub URL with curl, sending a token when one is configured so
+/// private repositories work. curl does not forward the header across the
+/// redirect to the asset host.
+fn curl_github(location: &str, action: &str, headers: &[&str]) -> Result<Vec<u8>, String> {
+    let mut command = ProcessCommand::new("curl");
+    command.args(["--fail", "--location", "--silent", "--show-error"]);
+    for header in headers {
+        command.args(["--header", header]);
+    }
+    if location.contains("github.com") || location.contains("githubusercontent.com") {
+        if let Some(token) = github_token() {
+            command
+                .arg("--header")
+                .arg(format!("Authorization: Bearer {token}"));
+        }
+    }
+    command.arg(location);
+    let output = command
+        .output()
+        .map_err(|error| format!("cannot run curl for {action}: {error}"))?;
+    if !output.status.success() {
+        return Err(process_failure(action, &output));
+    }
+    Ok(output.stdout)
 }
 
 fn read_release_api(location: &str) -> Result<Vec<u8>, String> {
     if location.contains("://") {
-        let output = ProcessCommand::new("curl")
-            .args([
-                "--fail",
-                "--location",
-                "--silent",
-                "--show-error",
-                "--header",
+        curl_github(
+            location,
+            "latest GitHub release lookup",
+            &[
                 "Accept: application/vnd.github+json",
-                "--header",
                 "X-GitHub-Api-Version: 2022-11-28",
-                location,
-            ])
-            .output()
-            .map_err(|error| format!("cannot run curl for latest GitHub release: {error}"))?;
-        if !output.status.success() {
-            return Err(process_failure("latest GitHub release lookup", &output));
-        }
-        Ok(output.stdout)
+            ],
+        )
     } else {
         fs::read(location)
             .map_err(|error| format!("cannot read release API fixture {location}: {error}"))
@@ -1106,14 +1139,12 @@ fn read_release_api(location: &str) -> Result<Vec<u8>, String> {
 
 fn read_manifest_location(location: &str) -> Result<Vec<u8>, String> {
     if location.contains("://") {
-        let output = ProcessCommand::new("curl")
-            .args(["--fail", "--location", "--silent", "--show-error", location])
-            .output()
-            .map_err(|error| format!("cannot run curl for compatibility manifest: {error}"))?;
-        if !output.status.success() {
-            return Err(process_failure("compatibility manifest download", &output));
-        }
-        Ok(output.stdout)
+        let headers: &[&str] = if location.contains("/releases/assets/") {
+            &["Accept: application/octet-stream"]
+        } else {
+            &[]
+        };
+        curl_github(location, "compatibility manifest download", headers)
     } else {
         fs::read(location)
             .map_err(|error| format!("cannot read compatibility manifest {location}: {error}"))
@@ -1285,6 +1316,11 @@ fn run_normal_mise_install_at(
     }
     if dry_run {
         command.arg("--dry-run");
+    }
+    // A private github: release cannot be resolved through the versions host;
+    // ask the GitHub API directly, which uses GITHUB_TOKEN when set.
+    if tools.iter().any(|tool| tool.starts_with("github:")) {
+        command.env("MISE_USE_VERSIONS_HOST", "false");
     }
     for tool in tools {
         command.arg(tool);
