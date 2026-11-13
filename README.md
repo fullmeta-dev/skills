@@ -6,7 +6,7 @@ mise and materializes selected skills for supported agents.
 
 ## Quick start
 
-Prerequisites: [mise](https://mise.jdx.dev/) 2026.6.14 or newer, Git, and a
+Prerequisites: [mise](https://mise.jdx.dev/) 2026.11.7 or newer, Git, and a
 supported agent. Release assets currently support Linux x86_64 and macOS
 arm64 only. Install the backend plugin and the released CLI as ordinary
 mise tools (no wrapper task is required):
@@ -49,7 +49,9 @@ deletes a pre-existing `skills` executable.
 `skills use` resolves a full Git commit or local tree digest and writes the
 selected config. `skills install` coordinates normal `mise install` for that
 config, then runs a locked link sync. The generated postinstall hook is the
-direct command `skills sync --locked`.
+direct command `skills sync --locked` for a project; a global or `--path`
+declaration writes the matching `--global`/`--path` flags so the hook targets
+its own config rather than the project mise happens to run it in.
 
 Use `--global`, `--path PATH`, and `--env ENV` to select the intended mise
 configuration. Project selections belong in `mise.toml`; environment-specific
@@ -57,7 +59,11 @@ profiles use `mise.<env>.toml`, while local-only choices can use
 `mise.local.toml` or `mise.<env>.local.toml` (normally gitignored). The effective config is never inferred
 from an arbitrary tool argument. `agents`, `codex`, and `cursor` use
 `.agents/skills` (or `~/.agents/skills` globally); `pi` and `claude` use their
-native locations. See the illustrative generated-style config at
+native locations. Generated links point into mise's installs and are
+machine-specific, so a project sync records them in `.git/info/exclude` and
+they do not appear in `git status` (a linked worktree is left alone because it
+shares `info/exclude`). See the illustrative generated-style config
+at
 [`examples/skills-project.mise.toml`](examples/skills-project.mise.toml). For
 other normal mise config scopes:
 

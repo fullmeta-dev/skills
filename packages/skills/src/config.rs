@@ -314,6 +314,7 @@ pub fn apply_use(
     track: Option<&str>,
     selectors: &[String],
     agents: &[String],
+    postinstall: &str,
 ) -> Result<(), String> {
     let key = format!("skills:{}", source.key);
     {
@@ -364,7 +365,7 @@ pub fn apply_use(
             table["agents"] = string_array(agents);
         }
     }
-    ensure_postinstall(document)
+    ensure_postinstall_command(document, postinstall)
 }
 
 pub fn remove_tool(
@@ -445,36 +446,75 @@ pub fn update_cli_release(document: &mut DocumentMut, version: &str) -> Result<(
     Ok(())
 }
 
+#[cfg(test)]
 pub fn ensure_postinstall(document: &mut DocumentMut) -> Result<(), String> {
+    ensure_postinstall_command(document, POSTINSTALL_COMMAND)
+}
+
+/// Add `postinstall` to the existing hook forms without replacing user content.
+/// The command is scope-aware so a hook in a global or explicit config targets
+/// that config rather than whatever project directory mise runs the hook in.
+pub fn ensure_postinstall_command(
+    document: &mut DocumentMut,
+    postinstall: &str,
+) -> Result<(), String> {
     let hooks = ensure_table(document, "hooks")?;
     match hooks.get_mut("postinstall") {
         None => {
             hooks.insert(
                 "postinstall",
-                Item::Value(Value::Array(string_array_values(&[
-                    POSTINSTALL_COMMAND.to_string()
-                ]))),
+                Item::Value(Value::Array(string_array_values(
+                    &[postinstall.to_string()],
+                ))),
             );
         }
         Some(item) if item.as_str().is_some() => {
             let old = item.as_str().unwrap_or_default().to_string();
-            if contains_exact_postinstall_action(&old) {
-                return Ok(());
+            match rewrite_managed_postinstall(&old, postinstall) {
+                Some(rewritten) => {
+                    if rewritten != old {
+                        let value = item.as_value_mut().expect("string item has a value");
+                        replace_value_preserving_decor(value, &rewritten);
+                    }
+                }
+                None => {
+                    let mut old_value = item.as_value().cloned().expect("string item has a value");
+                    let decor = old_value.decor().clone();
+                    old_value.decor_mut().clear();
+                    let mut array = Array::new();
+                    array.push_formatted(old_value);
+                    array.push(postinstall);
+                    let mut replacement = Value::Array(array);
+                    *replacement.decor_mut() = decor;
+                    *item = Item::Value(replacement);
+                }
             }
-            let mut old_value = item.as_value().cloned().expect("string item has a value");
-            let decor = old_value.decor().clone();
-            old_value.decor_mut().clear();
-            let mut array = Array::new();
-            array.push_formatted(old_value);
-            array.push(POSTINSTALL_COMMAND);
-            let mut replacement = Value::Array(array);
-            *replacement.decor_mut() = decor;
-            *item = Item::Value(replacement);
         }
         Some(item) if item.as_array().is_some() => {
             let array = item.as_array_mut().expect("array checked");
-            if !array_contains_command(array) {
-                array.push(POSTINSTALL_COMMAND);
+            let mut managed = false;
+            for entry in array.iter_mut() {
+                if let Some(text) = entry.as_str().map(str::to_string) {
+                    if let Some(rewritten) = rewrite_managed_postinstall(&text, postinstall) {
+                        if rewritten != text {
+                            *entry = Value::from(rewritten);
+                        }
+                        managed = true;
+                    }
+                } else if let Some(table) = entry.as_inline_table_mut() {
+                    let old = table.get("run").and_then(Value::as_str).map(str::to_string);
+                    if let Some(old) = old {
+                        if let Some(rewritten) = rewrite_managed_postinstall(&old, postinstall) {
+                            if rewritten != old {
+                                table.insert("run", Value::from(rewritten));
+                            }
+                            managed = true;
+                        }
+                    }
+                }
+            }
+            if !managed {
+                array.push(postinstall);
             }
         }
         Some(item) if item.as_table().is_some() => {
@@ -487,12 +527,16 @@ pub fn ensure_postinstall(document: &mut DocumentMut) -> Result<(), String> {
                 None => None,
             };
             match old {
-                Some(old) if !contains_exact_postinstall_action(&old) => {
-                    replace_string(table, "run", &format!("{old}\n{POSTINSTALL_COMMAND}"));
-                }
-                Some(_) => {}
+                Some(old) => match rewrite_managed_postinstall(&old, postinstall) {
+                    Some(rewritten) => {
+                        if rewritten != old {
+                            replace_string(table, "run", &rewritten);
+                        }
+                    }
+                    None => replace_string(table, "run", &format!("{old}\n{postinstall}")),
+                },
                 None => {
-                    table["run"] = value(POSTINSTALL_COMMAND);
+                    table["run"] = value(postinstall);
                 }
             }
         }
@@ -506,13 +550,20 @@ pub fn ensure_postinstall(document: &mut DocumentMut) -> Result<(), String> {
                 None => None,
             };
             match old {
-                Some(old) if !contains_exact_postinstall_action(&old) => {
-                    let run = table.get_mut("run").expect("run checked");
-                    replace_value_preserving_decor(run, &format!("{old}\n{POSTINSTALL_COMMAND}"));
-                }
-                Some(_) => {}
+                Some(old) => match rewrite_managed_postinstall(&old, postinstall) {
+                    Some(rewritten) => {
+                        if rewritten != old {
+                            let run = table.get_mut("run").expect("run checked");
+                            replace_value_preserving_decor(run, &rewritten);
+                        }
+                    }
+                    None => {
+                        let run = table.get_mut("run").expect("run checked");
+                        replace_value_preserving_decor(run, &format!("{old}\n{postinstall}"));
+                    }
+                },
                 None => {
-                    table.insert("run", Value::from(POSTINSTALL_COMMAND));
+                    table.insert("run", Value::from(postinstall));
                 }
             }
         }
@@ -552,12 +603,46 @@ fn replace_value_preserving_decor(item: &mut Value, replacement: &str) {
     *item = value;
 }
 
+/// Whether `value` is one of our generated `skills sync` hooks. A shell-composed
+/// or wrapped command that merely starts with `skills sync` is the user's and is
+/// preserved rather than rewritten.
 fn is_postinstall_command(value: &str) -> bool {
-    value == POSTINSTALL_COMMAND
+    let value = value.trim();
+    let Some(rest) = value.strip_prefix("skills sync") else {
+        return false;
+    };
+    if !(rest.is_empty() || rest.starts_with(' ')) {
+        return false;
+    }
+    let mut in_single_quotes = false;
+    for character in rest.chars() {
+        match character {
+            '\'' => in_single_quotes = !in_single_quotes,
+            _ if in_single_quotes => {}
+            '&' | '|' | ';' | '<' | '>' | '$' | '`' | '(' | ')' => return false,
+            _ => {}
+        }
+    }
+    true
 }
 
-fn contains_exact_postinstall_action(value: &str) -> bool {
-    value.split('\n').any(is_postinstall_command)
+/// Rewrite each managed `skills sync` line to `desired`. Returns `None` when
+/// `value` holds no managed command, so an unrelated hook is appended instead.
+fn rewrite_managed_postinstall(value: &str, desired: &str) -> Option<String> {
+    let mut found = false;
+    let rewritten = value
+        .split('\n')
+        .map(|line| {
+            if is_postinstall_command(line) {
+                found = true;
+                desired
+            } else {
+                line
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    found.then_some(rewritten)
 }
 
 fn string_field(table: &Table, field: &str, key: &str) -> Result<String, String> {
@@ -622,17 +707,6 @@ fn string_array_values(values: &[String]) -> Array {
     array
 }
 
-fn array_contains_command(array: &Array) -> bool {
-    array.iter().any(|item| {
-        item.as_str().is_some_and(contains_exact_postinstall_action)
-            || item
-                .as_inline_table()
-                .and_then(|table| table.get("run"))
-                .and_then(Value::as_str)
-                .is_some_and(contains_exact_postinstall_action)
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -679,7 +753,7 @@ mod tests {
     }
 
     #[test]
-    fn postinstall_deduplicates_only_exact_actions() {
+    fn postinstall_deduplicates_managed_actions() {
         for input in [
             "[hooks]\npostinstall = \"echo mise run skills -- sync --locked\"\n",
             "[hooks]\npostinstall = [\"echo mise run skills -- sync --locked\"]\n",
@@ -708,6 +782,56 @@ mod tests {
     }
 
     #[test]
+    fn a_stale_managed_hook_is_rewritten_to_the_desired_scope() {
+        for input in [
+            "[hooks]\npostinstall = \"skills sync --locked\"\n",
+            "[hooks]\npostinstall = [\"skills sync --locked\"]\n",
+            "[hooks.postinstall]\nrun = \"skills sync --locked\"\n",
+            "[hooks]\npostinstall = { run = \"skills sync --locked\" }\n",
+        ] {
+            let mut document = doc(input);
+            ensure_postinstall_command(&mut document, "skills sync --locked --global").unwrap();
+            let rendered = document.to_string();
+            assert!(
+                rendered.contains("skills sync --locked --global"),
+                "{rendered}"
+            );
+            assert!(!rendered.contains("\"skills sync --locked\""), "{rendered}");
+            assert_eq!(rendered.matches("skills sync").count(), 1, "{rendered}");
+        }
+    }
+
+    #[test]
+    fn shell_composed_managed_commands_are_preserved() {
+        let mut document = doc("[hooks]\npostinstall = \"skills sync --locked && echo keep\"\n");
+        ensure_postinstall_command(&mut document, "skills sync --locked --global").unwrap();
+        let rendered = document.to_string();
+        assert!(
+            rendered.contains("skills sync --locked && echo keep"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("skills sync --locked --global"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn an_array_inline_table_managed_command_is_rewritten() {
+        let mut document = doc(
+            "[hooks]\npostinstall = [{ run = \"skills sync --locked\", env = { KEEP = \"yes\" } }]\n",
+        );
+        ensure_postinstall_command(&mut document, "skills sync --locked --global").unwrap();
+        let rendered = document.to_string();
+        assert!(
+            rendered.contains("skills sync --locked --global"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("KEEP"), "{rendered}");
+        assert_eq!(rendered.matches("skills sync").count(), 1, "{rendered}");
+    }
+
+    #[test]
     fn use_preserves_unrelated_tables_and_rejects_source_repointing() {
         let root = tempfile::tempdir().unwrap();
         let source_dir = root.path().join("source");
@@ -724,6 +848,7 @@ mod tests {
             None,
             &["hello".into()],
             &["pi".into()],
+            POSTINSTALL_COMMAND,
         )
         .unwrap();
         let rendered = document.to_string();
@@ -744,6 +869,7 @@ mod tests {
             None,
             &[],
             &[],
+            POSTINSTALL_COMMAND,
         )
         .is_err());
     }

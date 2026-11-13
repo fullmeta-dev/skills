@@ -930,3 +930,482 @@ fn locked_sync_rejects_local_source_drift() {
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("local source changed"));
 }
+
+fn git_init(root: &Path) {
+    let run_git = |args: &[&str]| {
+        let status = Command::new("git")
+            .current_dir(root)
+            .args(args)
+            .status()
+            .expect("run git");
+        assert!(status.success(), "git {args:?} failed");
+    };
+    run_git(&["init", "-q"]);
+    run_git(&["config", "user.email", "test@example.invalid"]);
+    run_git(&["config", "user.name", "Test"]);
+}
+
+fn git_status(root: &Path) -> String {
+    let output = Command::new("git")
+        .current_dir(root)
+        .args(["status", "--porcelain"])
+        .output()
+        .expect("run git status");
+    assert!(output.status.success());
+    String::from_utf8_lossy(&output.stdout).to_string()
+}
+
+#[test]
+fn project_sync_hides_generated_links_from_git_status() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path().join("home");
+    let data = temp.path().join("data");
+    let state = temp.path().join("state");
+    let project = temp.path().join("project");
+    let source = temp.path().join("source");
+    for directory in [&home, &data, &state, &project, &source] {
+        fs::create_dir_all(directory).unwrap();
+    }
+    skill(&source, "demo");
+    git_init(&project);
+    fs::write(project.join("tracked.txt"), "keep\n").unwrap();
+    let config = project.join("mise.toml");
+    let source_arg = format!("path:{}", source.display());
+    let envs = [
+        ("HOME", home.as_path()),
+        ("MISE_DATA_DIR", data.as_path()),
+        ("MISE_STATE_DIR", state.as_path()),
+    ];
+    let output = run(
+        &project,
+        &[
+            "use",
+            "--path",
+            config.to_str().unwrap(),
+            &source_arg,
+            "demo",
+            "--agent",
+            "agents",
+            "--agent",
+            "pi",
+            "--agent",
+            "claude",
+        ],
+        &envs,
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let pinned = version(&config);
+    install_snapshot(&data, &pinned, &source);
+    let output = run(
+        &project,
+        &["sync", "--path", config.to_str().unwrap(), "--locked"],
+        &envs,
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let exclude_path = project.join(".git/info/exclude");
+    let exclude = fs::read_to_string(&exclude_path).unwrap();
+    for entry in [
+        "/.agents/skills/demo",
+        "/.pi/skills/demo",
+        "/.claude/skills/demo",
+    ] {
+        assert!(
+            exclude.contains(entry),
+            "exclude missing {entry}: {exclude}"
+        );
+    }
+    let status = git_status(&project);
+    for name in [".agents/skills", ".pi/skills", ".claude/skills"] {
+        assert!(!status.contains(name), "git status lists {name}: {status}");
+    }
+
+    let repeat = run(
+        &project,
+        &["sync", "--path", config.to_str().unwrap(), "--locked"],
+        &envs,
+    );
+    assert!(repeat.status.success());
+    assert_eq!(
+        fs::read_to_string(&exclude_path).unwrap(),
+        exclude,
+        "the exclude block must be idempotent"
+    );
+
+    let remove = run(
+        &project,
+        &[
+            "remove",
+            "--path",
+            config.to_str().unwrap(),
+            "skills:local/source",
+        ],
+        &envs,
+    );
+    assert!(
+        remove.status.success(),
+        "{}",
+        String::from_utf8_lossy(&remove.stderr)
+    );
+    let exclude = fs::read_to_string(&exclude_path).unwrap_or_default();
+    for name in ["/.agents/skills", "/.pi/skills", "/.claude/skills"] {
+        assert!(
+            !exclude.contains(name),
+            "exclude block not cleared for {name}: {exclude}"
+        );
+    }
+}
+
+#[test]
+fn sync_leaves_unmanaged_conflicts_visible_in_git_status() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path().join("home");
+    let data = temp.path().join("data");
+    let state = temp.path().join("state");
+    let project = temp.path().join("project");
+    let source = temp.path().join("source");
+    for directory in [&home, &data, &state, &project, &source] {
+        fs::create_dir_all(directory).unwrap();
+    }
+    skill(&source, "demo");
+    git_init(&project);
+    let config = project.join("mise.toml");
+    let source_arg = format!("path:{}", source.display());
+    let envs = [
+        ("HOME", home.as_path()),
+        ("MISE_DATA_DIR", data.as_path()),
+        ("MISE_STATE_DIR", state.as_path()),
+    ];
+    let output = run(
+        &project,
+        &[
+            "use",
+            "--path",
+            config.to_str().unwrap(),
+            &source_arg,
+            "demo",
+            "--agent",
+            "pi",
+        ],
+        &envs,
+    );
+    assert!(output.status.success());
+    let pinned = version(&config);
+    install_snapshot(&data, &pinned, &source);
+    fs::create_dir_all(project.join(".pi/skills")).unwrap();
+    fs::write(project.join(".pi/skills/demo"), "mine\n").unwrap();
+
+    let output = run(
+        &project,
+        &["sync", "--path", config.to_str().unwrap(), "--locked"],
+        &envs,
+    );
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("conflict"));
+    let exclude = fs::read_to_string(project.join(".git/info/exclude")).unwrap_or_default();
+    assert!(
+        !exclude.contains("/.pi/skills/demo"),
+        "an unmanaged conflict must not be ignored: {exclude}"
+    );
+    assert!(
+        git_status(&project).contains(".pi/"),
+        "an unmanaged conflict must stay visible to git"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn global_sync_does_not_touch_a_home_repository_exclude() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path().join("home");
+    let data = temp.path().join("data");
+    let state = temp.path().join("state");
+    let config_dir = temp.path().join("config");
+    let source = temp.path().join("source");
+    for directory in [&home, &data, &state, &config_dir, &source] {
+        fs::create_dir_all(directory).unwrap();
+    }
+    skill(&source, "demo");
+    git_init(&home);
+    let config = config_dir.join("config.toml");
+    let source_arg = format!("path:{}", source.display());
+    let envs = [
+        ("HOME", home.as_path()),
+        ("MISE_DATA_DIR", data.as_path()),
+        ("MISE_STATE_DIR", state.as_path()),
+        ("MISE_CONFIG_DIR", config_dir.as_path()),
+    ];
+    let output = run(
+        &home,
+        &[
+            "use",
+            "--global",
+            &source_arg,
+            "demo",
+            "--agent",
+            "agents",
+            "--agent",
+            "pi",
+            "--agent",
+            "claude",
+        ],
+        &envs,
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let pinned = version(&config);
+    install_snapshot(&data, &pinned, &source);
+    let output = run(&home, &["sync", "--global"], &envs);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(home.join(".agents/skills/demo").is_symlink());
+    let exclude = fs::read_to_string(home.join(".git/info/exclude")).unwrap_or_default();
+    assert!(
+        !exclude.contains("# >>> skills"),
+        "global sync must not write a home repository exclude: {exclude}"
+    );
+}
+
+#[test]
+fn manifest_persistence_failure_leaves_git_exclude_unchanged() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path().join("home");
+    let data = temp.path().join("data");
+    let state = temp.path().join("state");
+    let project = temp.path().join("project");
+    let source = temp.path().join("source");
+    for directory in [&home, &data, &state, &project, &source] {
+        fs::create_dir_all(directory).unwrap();
+    }
+    skill(&source, "demo");
+    git_init(&project);
+    let config = project.join("mise.toml");
+    let source_arg = format!("path:{}", source.display());
+    let envs = [
+        ("HOME", home.as_path()),
+        ("MISE_DATA_DIR", data.as_path()),
+        ("MISE_STATE_DIR", state.as_path()),
+    ];
+    let output = run(
+        &project,
+        &[
+            "use",
+            "--path",
+            config.to_str().unwrap(),
+            &source_arg,
+            "demo",
+            "--agent",
+            "pi",
+        ],
+        &envs,
+    );
+    assert!(output.status.success());
+    let first_version = version(&config);
+    install_snapshot(&data, &first_version, &source);
+    let output = run(
+        &project,
+        &["sync", "--path", config.to_str().unwrap(), "--locked"],
+        &envs,
+    );
+    assert!(output.status.success());
+    let exclude_path = project.join(".git/info/exclude");
+    let original_exclude = fs::read(&exclude_path).unwrap();
+
+    skill(&source, "two");
+    let output = run(
+        &project,
+        &[
+            "use",
+            "--path",
+            config.to_str().unwrap(),
+            &source_arg,
+            "demo",
+            "two",
+            "--agent",
+            "pi",
+        ],
+        &envs,
+    );
+    assert!(output.status.success());
+    let second_version = version(&config);
+    install_snapshot(&data, &second_version, &source);
+    let output = run_with(
+        &project,
+        &["sync", "--path", config.to_str().unwrap(), "--locked"],
+        &envs,
+        &[("MISE_SKILLS_FAIL_MANIFEST_WRITE", "1")],
+    );
+    assert!(!output.status.success());
+    assert_eq!(
+        fs::read(&exclude_path).unwrap(),
+        original_exclude,
+        "a failed sync must leave the git exclude unchanged"
+    );
+}
+
+#[test]
+fn replacing_a_managed_link_with_handwritten_content_restores_visibility() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path().join("home");
+    let data = temp.path().join("data");
+    let state = temp.path().join("state");
+    let project = temp.path().join("project");
+    let source = temp.path().join("source");
+    for directory in [&home, &data, &state, &project, &source] {
+        fs::create_dir_all(directory).unwrap();
+    }
+    skill(&source, "demo");
+    git_init(&project);
+    let config = project.join("mise.toml");
+    let source_arg = format!("path:{}", source.display());
+    let envs = [
+        ("HOME", home.as_path()),
+        ("MISE_DATA_DIR", data.as_path()),
+        ("MISE_STATE_DIR", state.as_path()),
+    ];
+    let output = run(
+        &project,
+        &[
+            "use",
+            "--path",
+            config.to_str().unwrap(),
+            &source_arg,
+            "demo",
+            "--agent",
+            "pi",
+        ],
+        &envs,
+    );
+    assert!(output.status.success());
+    let pinned = version(&config);
+    install_snapshot(&data, &pinned, &source);
+    let output = run(
+        &project,
+        &["sync", "--path", config.to_str().unwrap(), "--locked"],
+        &envs,
+    );
+    assert!(output.status.success());
+    let target = project.join(".pi/skills/demo");
+    assert!(target.is_symlink());
+
+    // Replace the managed link with handwritten content and sync again.
+    fs::remove_file(&target).unwrap();
+    fs::write(&target, "handwritten\n").unwrap();
+    let output = run(
+        &project,
+        &["sync", "--path", config.to_str().unwrap(), "--locked"],
+        &envs,
+    );
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("conflict"));
+    assert_eq!(fs::read_to_string(&target).unwrap(), "handwritten\n");
+    let exclude = fs::read_to_string(project.join(".git/info/exclude")).unwrap_or_default();
+    assert!(
+        !exclude.contains("/.pi/skills/demo"),
+        "handwritten content must not stay ignored: {exclude}"
+    );
+    assert!(
+        git_status(&project).contains(".pi/"),
+        "handwritten content must be visible to git"
+    );
+}
+
+#[test]
+fn a_failed_git_exclude_cleanup_is_retried_on_the_next_sync() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path().join("home");
+    let data = temp.path().join("data");
+    let state = temp.path().join("state");
+    let project = temp.path().join("project");
+    let source = temp.path().join("source");
+    for directory in [&home, &data, &state, &project, &source] {
+        fs::create_dir_all(directory).unwrap();
+    }
+    skill(&source, "demo");
+    git_init(&project);
+    let config = project.join("mise.toml");
+    let source_arg = format!("path:{}", source.display());
+    let envs = [
+        ("HOME", home.as_path()),
+        ("MISE_DATA_DIR", data.as_path()),
+        ("MISE_STATE_DIR", state.as_path()),
+    ];
+    let output = run(
+        &project,
+        &[
+            "use",
+            "--path",
+            config.to_str().unwrap(),
+            &source_arg,
+            "demo",
+            "--agent",
+            "pi",
+        ],
+        &envs,
+    );
+    assert!(output.status.success());
+    let pinned = version(&config);
+    install_snapshot(&data, &pinned, &source);
+    let output = run(
+        &project,
+        &["sync", "--path", config.to_str().unwrap(), "--locked"],
+        &envs,
+    );
+    assert!(output.status.success());
+    let exclude_path = project.join(".git/info/exclude");
+    assert!(fs::read_to_string(&exclude_path)
+        .unwrap()
+        .contains("/.pi/skills/demo"));
+
+    // Remove the declaration while exclude cleanup fails.
+    let output = run_with(
+        &project,
+        &[
+            "remove",
+            "--path",
+            config.to_str().unwrap(),
+            "skills:local/source",
+        ],
+        &envs,
+        &[("MISE_SKILLS_FAIL_GIT_EXCLUDE", "1")],
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("git exclude"));
+    assert!(
+        fs::read_to_string(&exclude_path)
+            .unwrap()
+            .contains("/.pi/skills/demo"),
+        "the block persists after a failed cleanup"
+    );
+
+    // A later sync retries the recorded root and clears the stale block.
+    let output = run(
+        &project,
+        &["sync", "--path", config.to_str().unwrap()],
+        &envs,
+    );
+    assert!(output.status.success());
+    let exclude = fs::read_to_string(&exclude_path).unwrap_or_default();
+    assert!(
+        !exclude.contains("/.pi/skills/demo"),
+        "the retried cleanup must clear the stale block: {exclude}"
+    );
+}

@@ -59,12 +59,12 @@ Register-ArgumentCompleter -Native -CommandName 'skills' -ScriptBlock {
         }
         'skills;use' {
             [CompletionResult]::new('--env', '--env', [CompletionResultType]::ParameterName, 'Select mise''s environment-specific config (`mise.<env>.toml`)')
-            [CompletionResult]::new('--path', '--path', [CompletionResultType]::ParameterName, 'Edit this mise config file (or mise.toml inside a directory)')
+            [CompletionResult]::new('--path', '--path', [CompletionResultType]::ParameterName, 'Select this mise config file (or mise.toml inside a directory)')
             [CompletionResult]::new('--agent', '--agent', [CompletionResultType]::ParameterName, 'Agent adapters to record in the declaration')
             [CompletionResult]::new('--subpath', '--subpath', [CompletionResultType]::ParameterName, 'Source-relative skill directory, validated against traversal')
-            [CompletionResult]::new('--track', '--track', [CompletionResultType]::ParameterName, 'Branch or tag to resolve. Defaults to the remote''s default branch')
-            [CompletionResult]::new('--reference', '--reference', [CompletionResultType]::ParameterName, 'Explicit Git ref to resolve once')
-            [CompletionResult]::new('--global', '--global', [CompletionResultType]::ParameterName, 'Edit the user-owned global mise config')
+            [CompletionResult]::new('--track', '--track', [CompletionResultType]::ParameterName, 'Branch or tag to resolve now and record as track. Defaults to the remote''s default branch')
+            [CompletionResult]::new('--reference', '--reference', [CompletionResultType]::ParameterName, 'Git ref or full commit to resolve now and record as track')
+            [CompletionResult]::new('--global', '--global', [CompletionResultType]::ParameterName, 'Select the user-owned global mise config')
             [CompletionResult]::new('--locked', '--locked', [CompletionResultType]::ParameterName, 'Do not resolve or rewrite an existing immutable version')
             [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help')
             [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help')
@@ -72,8 +72,8 @@ Register-ArgumentCompleter -Native -CommandName 'skills' -ScriptBlock {
         }
         'skills;upgrade' {
             [CompletionResult]::new('--env', '--env', [CompletionResultType]::ParameterName, 'Select mise''s environment-specific config (`mise.<env>.toml`)')
-            [CompletionResult]::new('--path', '--path', [CompletionResultType]::ParameterName, 'Edit this mise config file (or mise.toml inside a directory)')
-            [CompletionResult]::new('--global', '--global', [CompletionResultType]::ParameterName, 'Edit the user-owned global mise config')
+            [CompletionResult]::new('--path', '--path', [CompletionResultType]::ParameterName, 'Select this mise config file (or mise.toml inside a directory)')
+            [CompletionResult]::new('--global', '--global', [CompletionResultType]::ParameterName, 'Select the user-owned global mise config')
             [CompletionResult]::new('--locked', '--locked', [CompletionResultType]::ParameterName, 'Do not resolve or rewrite any declared version')
             [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help')
             [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help')
@@ -81,10 +81,10 @@ Register-ArgumentCompleter -Native -CommandName 'skills' -ScriptBlock {
         }
         'skills;install' {
             [CompletionResult]::new('--env', '--env', [CompletionResultType]::ParameterName, 'Select mise''s environment-specific config (`mise.<env>.toml`)')
-            [CompletionResult]::new('--path', '--path', [CompletionResultType]::ParameterName, 'Edit this mise config file (or mise.toml inside a directory)')
-            [CompletionResult]::new('--global', '--global', [CompletionResultType]::ParameterName, 'Edit the user-owned global mise config')
+            [CompletionResult]::new('--path', '--path', [CompletionResultType]::ParameterName, 'Select this mise config file (or mise.toml inside a directory)')
+            [CompletionResult]::new('--global', '--global', [CompletionResultType]::ParameterName, 'Select the user-owned global mise config')
             [CompletionResult]::new('--locked', '--locked', [CompletionResultType]::ParameterName, 'Require mise''s existing lockfile data without resolving tool URLs')
-            [CompletionResult]::new('--dry-run', '--dry-run', [CompletionResultType]::ParameterName, 'Show normal mise installation work without changing files')
+            [CompletionResult]::new('--dry-run', '--dry-run', [CompletionResultType]::ParameterName, 'Preview normal mise installation without changing files; skips the direct sync')
             [CompletionResult]::new('--accept-collision', '--accept-collision', [CompletionResultType]::ParameterName, 'Explicitly accept an unrelated existing `skills` executable')
             [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help')
             [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help')
@@ -102,25 +102,25 @@ Register-ArgumentCompleter -Native -CommandName 'skills' -ScriptBlock {
         }
         'skills;doctor' {
             [CompletionResult]::new('--env', '--env', [CompletionResultType]::ParameterName, 'Select mise''s environment-specific config (`mise.<env>.toml`)')
-            [CompletionResult]::new('--path', '--path', [CompletionResultType]::ParameterName, 'Edit this mise config file (or mise.toml inside a directory)')
-            [CompletionResult]::new('--global', '--global', [CompletionResultType]::ParameterName, 'Edit the user-owned global mise config')
+            [CompletionResult]::new('--path', '--path', [CompletionResultType]::ParameterName, 'Select this mise config file (or mise.toml inside a directory)')
+            [CompletionResult]::new('--global', '--global', [CompletionResultType]::ParameterName, 'Select the user-owned global mise config')
             [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help')
             [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help')
             break
         }
         'skills;sync' {
             [CompletionResult]::new('--env', '--env', [CompletionResultType]::ParameterName, 'Select mise''s environment-specific config (`mise.<env>.toml`)')
-            [CompletionResult]::new('--path', '--path', [CompletionResultType]::ParameterName, 'Edit this mise config file (or mise.toml inside a directory)')
-            [CompletionResult]::new('--global', '--global', [CompletionResultType]::ParameterName, 'Edit the user-owned global mise config')
-            [CompletionResult]::new('--locked', '--locked', [CompletionResultType]::ParameterName, 'Validate and converge using only already-declared immutable versions')
+            [CompletionResult]::new('--path', '--path', [CompletionResultType]::ParameterName, 'Select this mise config file (or mise.toml inside a directory)')
+            [CompletionResult]::new('--global', '--global', [CompletionResultType]::ParameterName, 'Select the user-owned global mise config')
+            [CompletionResult]::new('--locked', '--locked', [CompletionResultType]::ParameterName, 'Accepted for the generated postinstall hook; sync never resolves versions')
             [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help')
             [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help')
             break
         }
         'skills;status' {
             [CompletionResult]::new('--env', '--env', [CompletionResultType]::ParameterName, 'Select mise''s environment-specific config (`mise.<env>.toml`)')
-            [CompletionResult]::new('--path', '--path', [CompletionResultType]::ParameterName, 'Edit this mise config file (or mise.toml inside a directory)')
-            [CompletionResult]::new('--global', '--global', [CompletionResultType]::ParameterName, 'Edit the user-owned global mise config')
+            [CompletionResult]::new('--path', '--path', [CompletionResultType]::ParameterName, 'Select this mise config file (or mise.toml inside a directory)')
+            [CompletionResult]::new('--global', '--global', [CompletionResultType]::ParameterName, 'Select the user-owned global mise config')
             [CompletionResult]::new('--json', '--json', [CompletionResultType]::ParameterName, 'Emit machine-readable status')
             [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help')
             [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help')
@@ -128,16 +128,16 @@ Register-ArgumentCompleter -Native -CommandName 'skills' -ScriptBlock {
         }
         'skills;remove' {
             [CompletionResult]::new('--env', '--env', [CompletionResultType]::ParameterName, 'Select mise''s environment-specific config (`mise.<env>.toml`)')
-            [CompletionResult]::new('--path', '--path', [CompletionResultType]::ParameterName, 'Edit this mise config file (or mise.toml inside a directory)')
-            [CompletionResult]::new('--global', '--global', [CompletionResultType]::ParameterName, 'Edit the user-owned global mise config')
+            [CompletionResult]::new('--path', '--path', [CompletionResultType]::ParameterName, 'Select this mise config file (or mise.toml inside a directory)')
+            [CompletionResult]::new('--global', '--global', [CompletionResultType]::ParameterName, 'Select the user-owned global mise config')
             [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help')
             [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help')
             break
         }
         'skills;prune' {
             [CompletionResult]::new('--env', '--env', [CompletionResultType]::ParameterName, 'Select mise''s environment-specific config (`mise.<env>.toml`)')
-            [CompletionResult]::new('--path', '--path', [CompletionResultType]::ParameterName, 'Edit this mise config file (or mise.toml inside a directory)')
-            [CompletionResult]::new('--global', '--global', [CompletionResultType]::ParameterName, 'Edit the user-owned global mise config')
+            [CompletionResult]::new('--path', '--path', [CompletionResultType]::ParameterName, 'Select this mise config file (or mise.toml inside a directory)')
+            [CompletionResult]::new('--global', '--global', [CompletionResultType]::ParameterName, 'Select the user-owned global mise config')
             [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help')
             [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help')
             break

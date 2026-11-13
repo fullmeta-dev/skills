@@ -96,6 +96,14 @@ fn use_edits_project_and_explicit_paths_without_damaging_hooks() {
     assert!(fs::read_to_string(&explicit)
         .unwrap()
         .contains("[tools.\"skills:local/project-source\"]"));
+    let explicit_text = fs::read_to_string(&explicit).unwrap();
+    assert!(
+        explicit_text.contains(&format!(
+            "skills sync --locked --path {}",
+            explicit.display()
+        )),
+        "{explicit_text}"
+    );
 
     let local = project.join("mise.local.toml");
     let output = run(
@@ -136,6 +144,11 @@ fn use_edits_project_and_explicit_paths_without_damaging_hooks() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(profile.is_file());
+    let profile_text = fs::read_to_string(&profile).unwrap();
+    assert!(
+        profile_text.contains("skills sync --locked --env development"),
+        "{profile_text}"
+    );
 
     let global_dir = temp.path().join("global");
     fs::create_dir(&global_dir).unwrap();
@@ -158,6 +171,11 @@ fn use_edits_project_and_explicit_paths_without_damaging_hooks() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(global_dir.join("config.toml").is_file());
+    let global_text = fs::read_to_string(global_dir.join("config.toml")).unwrap();
+    assert!(
+        global_text.contains("skills sync --locked --global"),
+        "{global_text}"
+    );
 }
 
 #[test]

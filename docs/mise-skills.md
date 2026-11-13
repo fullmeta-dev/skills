@@ -72,7 +72,10 @@ explicit user decision and no existing executable is removed automatically.
 config path, then directly runs locked sync. It never passes a user-supplied
 tool selector to mise. The selected environment is passed as mise's `-E`/
 `MISE_ENV` context. Use `--global`, `--path PATH`, or `--env ENV`; global is
-not merged into project ownership manifests.
+not merged into project ownership manifests. The generated postinstall hook is
+scope-aware: a project declaration writes `skills sync --locked`, while a
+global or `--path` declaration writes the matching `--global`/`--path` flags,
+because mise runs the hook with the current project directory as its cwd.
 
 Commands default to the nearest project `mise.toml`. `--env development`
 writes/reads `mise.development.toml`, matching mise's environment-specific
@@ -161,6 +164,12 @@ selected config root owns only links recorded in:
 ```text
 $MISE_STATE_DIR/skills/<config-root-hash>.json
 ```
+
+Because those links resolve only on the machine that created them, project
+sync also lists the generated names in the repository's `.git/info/exclude`
+(a clone-local file, never committed) inside a marked `skills` block it keeps
+up to date. They therefore do not appear in `git status`. A linked worktree is
+left alone, because its `info/exclude` is shared with the main checkout.
 
 An existing unmanaged file, directory, or symlink is a collision. `sync` and
 `install` report it and leave it untouched. A changed managed link is also a

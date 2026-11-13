@@ -75,7 +75,7 @@ mise_cmd() {
 
 # This is the checked-in fixture's expected tree digest. It is intentionally a
 # test oracle, not a documented user workflow for calculating local versions.
-LOCAL_TREE_DIGEST="539d72aae084df5ce20ed5c4009aa88e4cf785934f45e48c3a39be2f18bd3a27"
+LOCAL_TREE_DIGEST="613687b799a4edfab1253ceadf04556a1135c168c9601fa1e725e24470fd2a7f"
 LOCAL_VERSION="tree-$LOCAL_TREE_DIGEST"
 
 printf 'installing shipped plugin through mise plugins install\n'
@@ -114,7 +114,7 @@ assert manifest["version"] == f"rev:{revision}", manifest
 assert manifest["revision"] == f"rev:{revision}", manifest
 assert manifest["skills"] == [{
     "path": "skills/demo",
-    "tree": "5afb149df6000f52f46fdccc98d6f0888d9e54f46a01b1f695bf660868d0a49b",
+    "tree": "99e95cc844e85c64e47403a453aff759857ac4eddddcb5f5dac03568f36e9d98",
 }], manifest
 PY
 

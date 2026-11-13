@@ -51,24 +51,24 @@ complete -c skills -n "__fish_skills_using_subcommand list" -l json -d 'Emit sta
 complete -c skills -n "__fish_skills_using_subcommand list" -l explain -d 'Explain shadowing, selector decisions, and missing selectors'
 complete -c skills -n "__fish_skills_using_subcommand list" -s h -l help -d 'Print help'
 complete -c skills -n "__fish_skills_using_subcommand use" -l env -d 'Select mise\'s environment-specific config (`mise.<env>.toml`)' -r
-complete -c skills -n "__fish_skills_using_subcommand use" -l path -d 'Edit this mise config file (or mise.toml inside a directory)' -r -F
+complete -c skills -n "__fish_skills_using_subcommand use" -l path -d 'Select this mise config file (or mise.toml inside a directory)' -r -F
 complete -c skills -n "__fish_skills_using_subcommand use" -l agent -d 'Agent adapters to record in the declaration' -r
 complete -c skills -n "__fish_skills_using_subcommand use" -l subpath -d 'Source-relative skill directory, validated against traversal' -r
-complete -c skills -n "__fish_skills_using_subcommand use" -l track -d 'Branch or tag to resolve. Defaults to the remote\'s default branch' -r
-complete -c skills -n "__fish_skills_using_subcommand use" -l reference -d 'Explicit Git ref to resolve once' -r
-complete -c skills -n "__fish_skills_using_subcommand use" -l global -d 'Edit the user-owned global mise config'
+complete -c skills -n "__fish_skills_using_subcommand use" -l track -d 'Branch or tag to resolve now and record as track. Defaults to the remote\'s default branch' -r
+complete -c skills -n "__fish_skills_using_subcommand use" -l reference -d 'Git ref or full commit to resolve now and record as track' -r
+complete -c skills -n "__fish_skills_using_subcommand use" -l global -d 'Select the user-owned global mise config'
 complete -c skills -n "__fish_skills_using_subcommand use" -l locked -d 'Do not resolve or rewrite an existing immutable version'
 complete -c skills -n "__fish_skills_using_subcommand use" -s h -l help -d 'Print help'
 complete -c skills -n "__fish_skills_using_subcommand upgrade" -l env -d 'Select mise\'s environment-specific config (`mise.<env>.toml`)' -r
-complete -c skills -n "__fish_skills_using_subcommand upgrade" -l path -d 'Edit this mise config file (or mise.toml inside a directory)' -r -F
-complete -c skills -n "__fish_skills_using_subcommand upgrade" -l global -d 'Edit the user-owned global mise config'
+complete -c skills -n "__fish_skills_using_subcommand upgrade" -l path -d 'Select this mise config file (or mise.toml inside a directory)' -r -F
+complete -c skills -n "__fish_skills_using_subcommand upgrade" -l global -d 'Select the user-owned global mise config'
 complete -c skills -n "__fish_skills_using_subcommand upgrade" -l locked -d 'Do not resolve or rewrite any declared version'
 complete -c skills -n "__fish_skills_using_subcommand upgrade" -s h -l help -d 'Print help'
 complete -c skills -n "__fish_skills_using_subcommand install" -l env -d 'Select mise\'s environment-specific config (`mise.<env>.toml`)' -r
-complete -c skills -n "__fish_skills_using_subcommand install" -l path -d 'Edit this mise config file (or mise.toml inside a directory)' -r -F
-complete -c skills -n "__fish_skills_using_subcommand install" -l global -d 'Edit the user-owned global mise config'
+complete -c skills -n "__fish_skills_using_subcommand install" -l path -d 'Select this mise config file (or mise.toml inside a directory)' -r -F
+complete -c skills -n "__fish_skills_using_subcommand install" -l global -d 'Select the user-owned global mise config'
 complete -c skills -n "__fish_skills_using_subcommand install" -l locked -d 'Require mise\'s existing lockfile data without resolving tool URLs'
-complete -c skills -n "__fish_skills_using_subcommand install" -l dry-run -d 'Show normal mise installation work without changing files'
+complete -c skills -n "__fish_skills_using_subcommand install" -l dry-run -d 'Preview normal mise installation without changing files; skips the direct sync'
 complete -c skills -n "__fish_skills_using_subcommand install" -l accept-collision -d 'Explicitly accept an unrelated existing `skills` executable'
 complete -c skills -n "__fish_skills_using_subcommand install" -s h -l help -d 'Print help'
 complete -c skills -n "__fish_skills_using_subcommand self-update" -l path -d 'Update this mise config file' -r -F
@@ -78,26 +78,26 @@ complete -c skills -n "__fish_skills_using_subcommand self-update" -l global -d 
 complete -c skills -n "__fish_skills_using_subcommand self-update" -l dry-run -d 'Show the compatible pair and planned changes without installing or editing'
 complete -c skills -n "__fish_skills_using_subcommand self-update" -s h -l help -d 'Print help'
 complete -c skills -n "__fish_skills_using_subcommand doctor" -l env -d 'Select mise\'s environment-specific config (`mise.<env>.toml`)' -r
-complete -c skills -n "__fish_skills_using_subcommand doctor" -l path -d 'Edit this mise config file (or mise.toml inside a directory)' -r -F
-complete -c skills -n "__fish_skills_using_subcommand doctor" -l global -d 'Edit the user-owned global mise config'
+complete -c skills -n "__fish_skills_using_subcommand doctor" -l path -d 'Select this mise config file (or mise.toml inside a directory)' -r -F
+complete -c skills -n "__fish_skills_using_subcommand doctor" -l global -d 'Select the user-owned global mise config'
 complete -c skills -n "__fish_skills_using_subcommand doctor" -s h -l help -d 'Print help'
 complete -c skills -n "__fish_skills_using_subcommand sync" -l env -d 'Select mise\'s environment-specific config (`mise.<env>.toml`)' -r
-complete -c skills -n "__fish_skills_using_subcommand sync" -l path -d 'Edit this mise config file (or mise.toml inside a directory)' -r -F
-complete -c skills -n "__fish_skills_using_subcommand sync" -l global -d 'Edit the user-owned global mise config'
-complete -c skills -n "__fish_skills_using_subcommand sync" -l locked -d 'Validate and converge using only already-declared immutable versions'
+complete -c skills -n "__fish_skills_using_subcommand sync" -l path -d 'Select this mise config file (or mise.toml inside a directory)' -r -F
+complete -c skills -n "__fish_skills_using_subcommand sync" -l global -d 'Select the user-owned global mise config'
+complete -c skills -n "__fish_skills_using_subcommand sync" -l locked -d 'Accepted for the generated postinstall hook; sync never resolves versions'
 complete -c skills -n "__fish_skills_using_subcommand sync" -s h -l help -d 'Print help'
 complete -c skills -n "__fish_skills_using_subcommand status" -l env -d 'Select mise\'s environment-specific config (`mise.<env>.toml`)' -r
-complete -c skills -n "__fish_skills_using_subcommand status" -l path -d 'Edit this mise config file (or mise.toml inside a directory)' -r -F
-complete -c skills -n "__fish_skills_using_subcommand status" -l global -d 'Edit the user-owned global mise config'
+complete -c skills -n "__fish_skills_using_subcommand status" -l path -d 'Select this mise config file (or mise.toml inside a directory)' -r -F
+complete -c skills -n "__fish_skills_using_subcommand status" -l global -d 'Select the user-owned global mise config'
 complete -c skills -n "__fish_skills_using_subcommand status" -l json -d 'Emit machine-readable status'
 complete -c skills -n "__fish_skills_using_subcommand status" -s h -l help -d 'Print help'
 complete -c skills -n "__fish_skills_using_subcommand remove" -l env -d 'Select mise\'s environment-specific config (`mise.<env>.toml`)' -r
-complete -c skills -n "__fish_skills_using_subcommand remove" -l path -d 'Edit this mise config file (or mise.toml inside a directory)' -r -F
-complete -c skills -n "__fish_skills_using_subcommand remove" -l global -d 'Edit the user-owned global mise config'
+complete -c skills -n "__fish_skills_using_subcommand remove" -l path -d 'Select this mise config file (or mise.toml inside a directory)' -r -F
+complete -c skills -n "__fish_skills_using_subcommand remove" -l global -d 'Select the user-owned global mise config'
 complete -c skills -n "__fish_skills_using_subcommand remove" -s h -l help -d 'Print help'
 complete -c skills -n "__fish_skills_using_subcommand prune" -l env -d 'Select mise\'s environment-specific config (`mise.<env>.toml`)' -r
-complete -c skills -n "__fish_skills_using_subcommand prune" -l path -d 'Edit this mise config file (or mise.toml inside a directory)' -r -F
-complete -c skills -n "__fish_skills_using_subcommand prune" -l global -d 'Edit the user-owned global mise config'
+complete -c skills -n "__fish_skills_using_subcommand prune" -l path -d 'Select this mise config file (or mise.toml inside a directory)' -r -F
+complete -c skills -n "__fish_skills_using_subcommand prune" -l global -d 'Select the user-owned global mise config'
 complete -c skills -n "__fish_skills_using_subcommand prune" -s h -l help -d 'Print help'
 complete -c skills -n "__fish_skills_using_subcommand validate" -l subpath -d 'Select a source subpath before validation' -r -F
 complete -c skills -n "__fish_skills_using_subcommand validate" -l json -d 'Emit stable machine-readable diagnostics'

@@ -16,7 +16,7 @@ fn fake_mise(root: &Path) -> std::path::PathBuf {
         r#"#!/bin/sh
 printf '%s\n' "$*" >> "$FAKE_MISE_LOG"
 case "$1" in
-  --version) echo '2026.6.14 linux';;
+  --version) echo "${FAKE_MISE_VERSION:-2026.11.7} linux";;
   which) exit 1;;
   install) test "${FAKE_MISE_FAIL_INSTALL:-0}" = 1 && exit 9; exit 0;;
   plugins) exit 0;;
@@ -83,7 +83,7 @@ fn self_update_keeps_old_config_when_normal_mise_install_fails() {
     let manifest = temp.path().join("compat.json");
     fs::write(
         &manifest,
-        r#"{"schema_version":1,"latest":"0.2.0","releases":{"0.2.0":{"minimum_mise":"2026.6.14","plugin_url":"https://new/plugin.git","plugin_revision":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}}"#,
+        r#"{"schema_version":1,"latest":"0.2.0","releases":{"0.2.0":{"minimum_mise":"2026.11.7","plugin_url":"https://new/plugin.git","plugin_revision":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}}"#,
     )
     .unwrap();
     let output = Command::new(binary())
@@ -129,6 +129,47 @@ fn self_update_keeps_old_config_when_normal_mise_install_fails() {
 
 #[test]
 #[cfg(unix)]
+fn self_update_refuses_a_mise_older_than_the_manifest_minimum() {
+    let temp = TempDir::new().unwrap();
+    let bin_dir = temp.path().join("bin");
+    let config_dir = temp.path().join("config");
+    fs::create_dir_all(&bin_dir).unwrap();
+    fs::create_dir_all(&config_dir).unwrap();
+    let mise = fake_mise(&bin_dir);
+    let config = config_dir.join("config.toml");
+    let original =
+        "[tools.\"github:fullmeta-dev/skills\"]\nversion = \"0.1.0\"\nbin = \"skills\"\n";
+    fs::write(&config, original).unwrap();
+    let manifest = temp.path().join("release-compatibility.json");
+    fs::write(
+        &manifest,
+        r#"{"schema_version":1,"latest":"0.3.0","releases":{"0.3.0":{"minimum_mise":"2026.11.7","plugin_url":"https://new/plugin.git","plugin_revision":"cccccccccccccccccccccccccccccccccccccccc"}}}"#,
+    )
+    .unwrap();
+    let log = temp.path().join("mise.log");
+    let output = Command::new(binary())
+        .current_dir(temp.path())
+        .args(["self-update"])
+        .env("MISE_BIN", &mise)
+        .env("MISE_CONFIG_DIR", &config_dir)
+        .env("HOME", temp.path().join("home"))
+        .env("PATH", &bin_dir)
+        .env("FAKE_MISE_LOG", &log)
+        .env("FAKE_MISE_VERSION", "2026.11.6")
+        .env("SKILLS_COMPATIBILITY_MANIFEST", &manifest)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("requires mise >= 2026.11.7"), "{stderr}");
+    assert_eq!(fs::read_to_string(&config).unwrap(), original);
+    let invocations = fs::read_to_string(&log).unwrap_or_default();
+    assert!(!invocations.contains(" install "));
+    assert!(!invocations.contains("plugins install"));
+}
+
+#[test]
+#[cfg(unix)]
 fn self_update_dry_run_does_not_install_or_edit() {
     let temp = TempDir::new().unwrap();
     let bin_dir = temp.path().join("bin");
@@ -143,7 +184,7 @@ fn self_update_dry_run_does_not_install_or_edit() {
     let manifest = temp.path().join("release-compatibility.json");
     fs::write(
         &manifest,
-        r#"{"schema_version":1,"latest":"0.3.0","releases":{"0.3.0":{"minimum_mise":"2026.6.14","plugin_url":"https://new/plugin.git","plugin_revision":"cccccccccccccccccccccccccccccccccccccccc"}}}"#,
+        r#"{"schema_version":1,"latest":"0.3.0","releases":{"0.3.0":{"minimum_mise":"2026.11.7","plugin_url":"https://new/plugin.git","plugin_revision":"cccccccccccccccccccccccccccccccccccccccc"}}}"#,
     )
     .unwrap();
     let log = temp.path().join("mise.log");
@@ -188,7 +229,7 @@ fn self_update_reads_manifest_from_latest_release_asset_fixture() {
     let manifest = temp.path().join("release-compatibility.json");
     fs::write(
         &manifest,
-        r#"{"schema_version":1,"latest":"0.3.0","releases":{"0.3.0":{"minimum_mise":"2026.6.14","plugin_url":"https://new/plugin.git","plugin_revision":"cccccccccccccccccccccccccccccccccccccccc"}}}"#,
+        r#"{"schema_version":1,"latest":"0.3.0","releases":{"0.3.0":{"minimum_mise":"2026.11.7","plugin_url":"https://new/plugin.git","plugin_revision":"cccccccccccccccccccccccccccccccccccccccc"}}}"#,
     )
     .unwrap();
     let api = temp.path().join("latest-release.json");

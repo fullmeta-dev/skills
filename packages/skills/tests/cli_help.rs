@@ -16,23 +16,55 @@ fn run(cwd: &Path, args: &[&str]) -> Output {
         .expect("run skills")
 }
 
+fn help(cwd: &Path, args: &[&str]) -> String {
+    let output = run(cwd, args);
+    assert!(
+        output.status.success(),
+        "{args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        output.stderr.is_empty(),
+        "{args:?} wrote stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 #[test]
-fn documented_commands_have_scope_failure_and_example_help() {
+fn documented_commands_are_self_documenting_for_operators_and_agents() {
     let temp = TempDir::new().unwrap();
-    let top = run(temp.path(), &["--help"]);
-    assert!(top.status.success());
-    let top_text = String::from_utf8_lossy(&top.stdout);
+    let top = help(temp.path(), &["--help"]);
     for phrase in [
-        "Normal behavior:",
-        "Scope:",
-        "Examples:",
+        "Bootstrap (once per machine):",
+        "mise plugins install skills",
+        "release-compatibility.json",
+        "bin = \"skills\"",
+        "owner/repository",
+        "path:DIR",
+        "tag:web+frontend",
+        "excludes always win",
+        "[tools.\"skills:fullmeta-dev/skills\"]",
+        "postinstall = [\"skills sync --locked\"]",
+        "~/.pi/agent/skills",
+        "Ownership and safety:",
         "Lifecycle:",
-        "Agents:",
-        "descriptions",
-        "completions",
+        "Examples:",
     ] {
-        assert!(top_text.contains(phrase), "top-level help missing {phrase}");
+        assert!(top.contains(phrase), "top-level help missing {phrase}");
     }
+    assert!(
+        !top.contains("unavailable inspection commands are reported"),
+        "top-level help still claims doctor reports unavailable inspections"
+    );
+    let use_help = help(temp.path(), &["use", "--help"]);
+    assert!(
+        !use_help.contains("Explicit Git ref to resolve once"),
+        "use help still describes --reference as a one-time resolution"
+    );
 
     for command in [
         "list",
@@ -48,10 +80,8 @@ fn documented_commands_have_scope_failure_and_example_help() {
         "validate",
         "completions",
     ] {
-        let output = run(temp.path(), &[command, "--help"]);
-        assert!(output.status.success(), "{command} --help failed");
-        let text = String::from_utf8_lossy(&output.stdout);
-        for phrase in ["Normal:", "Failure:", "Scope:", "Example:"] {
+        let text = help(temp.path(), &[command, "--help"]);
+        for phrase in ["Normal:", "Example:"] {
             assert!(
                 text.contains(phrase),
                 "{command} help missing {phrase}: {text}"
@@ -59,11 +89,39 @@ fn documented_commands_have_scope_failure_and_example_help() {
         }
     }
 
-    let list = run(temp.path(), &["list", "--help"]);
-    let list_text = String::from_utf8_lossy(&list.stdout);
-    for phrase in ["temporary checkout", "immutable", "aliases", "--reference"] {
-        assert!(list_text.contains(phrase), "list help missing {phrase}");
+    let list = help(temp.path(), &["list", "--help"]);
+    for phrase in [
+        "SOURCE is required",
+        "temporary checkout",
+        "immutable",
+        "--reference",
+        "with none, every discovered skill",
+    ] {
+        assert!(list.contains(phrase), "list help missing {phrase}");
     }
+    let use_help = help(temp.path(), &["use", "--help"]);
+    for phrase in [
+        "at least one --agent",
+        "never installs or activates",
+        "--locked requires an existing declaration",
+    ] {
+        assert!(use_help.contains(phrase), "use help missing {phrase}");
+    }
+    let sync = help(temp.path(), &["sync", "--help"]);
+    for phrase in ["never installs", "does not change behavior"] {
+        assert!(sync.contains(phrase), "sync help missing {phrase}");
+    }
+    let doctor = help(temp.path(), &["doctor", "--help"]);
+    assert!(!doctor.contains("unavailable inspection commands are reported"));
+    let self_update = help(temp.path(), &["self-update", "--help"]);
+    for phrase in ["not a bootstrap command", "release-compatibility.json"] {
+        assert!(
+            self_update.contains(phrase),
+            "self-update help missing {phrase}"
+        );
+    }
+    assert!(help(temp.path(), &["validate", "--help"]).contains("Alias: check"));
+    assert!(help(temp.path(), &["completions", "--help"]).contains("Alias: completion"));
 }
 
 #[test]

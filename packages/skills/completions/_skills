@@ -49,24 +49,24 @@ _arguments "${_arguments_options[@]}" : \
 (use)
 _arguments "${_arguments_options[@]}" : \
 '--env=[Select mise'\''s environment-specific config (\`mise.<env>.toml\`)]:ENV:_default' \
-'(--global)--path=[Edit this mise config file (or mise.toml inside a directory)]:PATH:_files' \
+'(--global)--path=[Select this mise config file (or mise.toml inside a directory)]:PATH:_files' \
 '*--agent=[Agent adapters to record in the declaration]:AGENTS:_default' \
 '--subpath=[Source-relative skill directory, validated against traversal]:SUBPATH:_default' \
-'(--reference)--track=[Branch or tag to resolve. Defaults to the remote'\''s default branch]:TRACK:_default' \
-'(--track)--reference=[Explicit Git ref to resolve once]:REFERENCE:_default' \
-'(--path)--global[Edit the user-owned global mise config]' \
+'(--reference)--track=[Branch or tag to resolve now and record as track. Defaults to the remote'\''s default branch]:TRACK:_default' \
+'(--track)--reference=[Git ref or full commit to resolve now and record as track]:REFERENCE:_default' \
+'(--path)--global[Select the user-owned global mise config]' \
 '--locked[Do not resolve or rewrite an existing immutable version]' \
 '-h[Print help]' \
 '--help[Print help]' \
 ':source -- Source (`owner/repository`, `github\:...`, `git\:...`, or `path\:...`):_default' \
-'*::selectors -- Skills to include. An omitted list keeps an existing selection policy:_default' \
+'*::selectors -- Optional include selectors; omit to keep an existing selection policy:_default' \
 && ret=0
 ;;
 (upgrade)
 _arguments "${_arguments_options[@]}" : \
 '--env=[Select mise'\''s environment-specific config (\`mise.<env>.toml\`)]:ENV:_default' \
-'(--global)--path=[Edit this mise config file (or mise.toml inside a directory)]:PATH:_files' \
-'(--path)--global[Edit the user-owned global mise config]' \
+'(--global)--path=[Select this mise config file (or mise.toml inside a directory)]:PATH:_files' \
+'(--path)--global[Select the user-owned global mise config]' \
 '--locked[Do not resolve or rewrite any declared version]' \
 '-h[Print help]' \
 '--help[Print help]' \
@@ -76,10 +76,10 @@ _arguments "${_arguments_options[@]}" : \
 (install)
 _arguments "${_arguments_options[@]}" : \
 '--env=[Select mise'\''s environment-specific config (\`mise.<env>.toml\`)]:ENV:_default' \
-'(--global)--path=[Edit this mise config file (or mise.toml inside a directory)]:PATH:_files' \
-'(--path)--global[Edit the user-owned global mise config]' \
+'(--global)--path=[Select this mise config file (or mise.toml inside a directory)]:PATH:_files' \
+'(--path)--global[Select the user-owned global mise config]' \
 '--locked[Require mise'\''s existing lockfile data without resolving tool URLs]' \
-'--dry-run[Show normal mise installation work without changing files]' \
+'--dry-run[Preview normal mise installation without changing files; skips the direct sync]' \
 '--accept-collision[Explicitly accept an unrelated existing \`skills\` executable]' \
 '-h[Print help]' \
 '--help[Print help]' \
@@ -99,8 +99,8 @@ _arguments "${_arguments_options[@]}" : \
 (doctor)
 _arguments "${_arguments_options[@]}" : \
 '--env=[Select mise'\''s environment-specific config (\`mise.<env>.toml\`)]:ENV:_default' \
-'(--global)--path=[Edit this mise config file (or mise.toml inside a directory)]:PATH:_files' \
-'(--path)--global[Edit the user-owned global mise config]' \
+'(--global)--path=[Select this mise config file (or mise.toml inside a directory)]:PATH:_files' \
+'(--path)--global[Select the user-owned global mise config]' \
 '-h[Print help]' \
 '--help[Print help]' \
 && ret=0
@@ -108,9 +108,9 @@ _arguments "${_arguments_options[@]}" : \
 (sync)
 _arguments "${_arguments_options[@]}" : \
 '--env=[Select mise'\''s environment-specific config (\`mise.<env>.toml\`)]:ENV:_default' \
-'(--global)--path=[Edit this mise config file (or mise.toml inside a directory)]:PATH:_files' \
-'(--path)--global[Edit the user-owned global mise config]' \
-'--locked[Validate and converge using only already-declared immutable versions]' \
+'(--global)--path=[Select this mise config file (or mise.toml inside a directory)]:PATH:_files' \
+'(--path)--global[Select the user-owned global mise config]' \
+'--locked[Accepted for the generated postinstall hook; sync never resolves versions]' \
 '-h[Print help]' \
 '--help[Print help]' \
 && ret=0
@@ -118,8 +118,8 @@ _arguments "${_arguments_options[@]}" : \
 (status)
 _arguments "${_arguments_options[@]}" : \
 '--env=[Select mise'\''s environment-specific config (\`mise.<env>.toml\`)]:ENV:_default' \
-'(--global)--path=[Edit this mise config file (or mise.toml inside a directory)]:PATH:_files' \
-'(--path)--global[Edit the user-owned global mise config]' \
+'(--global)--path=[Select this mise config file (or mise.toml inside a directory)]:PATH:_files' \
+'(--path)--global[Select the user-owned global mise config]' \
 '--json[Emit machine-readable status]' \
 '-h[Print help]' \
 '--help[Print help]' \
@@ -128,8 +128,8 @@ _arguments "${_arguments_options[@]}" : \
 (remove)
 _arguments "${_arguments_options[@]}" : \
 '--env=[Select mise'\''s environment-specific config (\`mise.<env>.toml\`)]:ENV:_default' \
-'(--global)--path=[Edit this mise config file (or mise.toml inside a directory)]:PATH:_files' \
-'(--path)--global[Edit the user-owned global mise config]' \
+'(--global)--path=[Select this mise config file (or mise.toml inside a directory)]:PATH:_files' \
+'(--path)--global[Select the user-owned global mise config]' \
 '-h[Print help]' \
 '--help[Print help]' \
 ':tool -- Skill tool key, with or without the `skills\:` prefix:_default' \
@@ -139,8 +139,8 @@ _arguments "${_arguments_options[@]}" : \
 (prune)
 _arguments "${_arguments_options[@]}" : \
 '--env=[Select mise'\''s environment-specific config (\`mise.<env>.toml\`)]:ENV:_default' \
-'(--global)--path=[Edit this mise config file (or mise.toml inside a directory)]:PATH:_files' \
-'(--path)--global[Edit the user-owned global mise config]' \
+'(--global)--path=[Select this mise config file (or mise.toml inside a directory)]:PATH:_files' \
+'(--path)--global[Select the user-owned global mise config]' \
 '-h[Print help]' \
 '--help[Print help]' \
 && ret=0

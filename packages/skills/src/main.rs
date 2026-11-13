@@ -1,4 +1,5 @@
 mod config;
+mod git_exclude;
 mod lifecycle;
 mod source;
 
@@ -24,8 +25,134 @@ use std::process::{Command as ProcessCommand, ExitCode};
     name = "skills",
     version,
     about = "Discover and manage Agent Skills from immutable source snapshots",
-    long_about = "Discover and manage Agent Skills from local directories and Git repositories, then install selected immutable snapshots through mise. Sources are local paths, GitHub owner/repository shorthands, github:owner/repository, or git URLs.\n\nRead-only discovery starts with `skills list SOURCE`: inspect names, descriptions, tags, aliases, files, and selector explanations before changing a config. `skills use SOURCE SELECTOR... --agent ADAPTER...` records the selection and immutable pin. `skills install` runs normal mise installation and activates links.\n\nOnly `skills upgrade` follows a branch or tag to a new source revision. `status`, `sync --locked`, `remove`, and `prune` manage existing project/global links without changing unrelated files.",
-    after_help = "Normal behavior: list is read-only; use and upgrade edit source declarations; install and sync converge immutable artifacts and owned links; remove and prune clean up only this config's ownership. Failures leave unrelated files and TOML untouched.\n\nLifecycle:\n  1. skills list github:owner/repo --json\n  2. skills use owner/repo skill-name --agent pi\n  3. skills install\n  4. skills status\n  5. skills upgrade && skills install\n\nAgents:\n  agents/codex/cursor -> .agents/skills (project) or ~/.agents/skills (global)\n  pi                  -> .pi/skills or ~/.pi/agent/skills\n  claude              -> .claude/skills or ~/.claude/skills\n\nScope:\n  project (default) -> mise.toml; --env NAME -> mise.NAME.toml\n  --path PATH       -> an explicit mise config; --global -> user config\n  Commit project/profile configs as normal mise files; keep mise.local.toml\n  or other local environment files uncommitted when appropriate.\n\nExamples:\n  skills list fullmeta-dev/skills --include tag:repository+experimental --json\n  skills list git:https://github.com/org/repo.git --reference main --explain\n  skills use fullmeta-dev/skills mise --agent pi --agent claude\n  skills use --env development fullmeta-dev/skills mise --agent agents\n  skills install && skills status --json\n  skills remove skills:fullmeta-dev/skills mise\n  skills completions bash > ~/.local/share/bash-completion/completions/skills"
+    long_about = "Discover Agent Skills from local directories and Git repositories and declare immutable source snapshots as ordinary mise tools.\n\nStart with `skills list SOURCE` to inspect names, descriptions, tags, aliases, and files. `skills use SOURCE [SELECTOR...] --agent AGENT...` records the selection and an immutable pin. `skills install` runs normal mise installation and activates owned links. Only `skills upgrade` follows a recorded update track; install and sync never do.\n\nRun `skills COMMAND --help` for that command's arguments, defaults, side effects, and failure behavior.",
+    after_help = r#"Bootstrap (once per machine):
+  Requires mise >= 2026.11.7, Git, curl (for online self-update), and an
+  activated mise shell. Published
+  binaries support Linux x86_64 and macOS arm64 only. Pick the compatible
+  CLI/backend pair from the latest release's immutable release-compatibility.json
+  asset (releases[VERSION].plugin_revision); do not guess the backend commit.
+
+    mise plugins install skills "https://github.com/fullmeta-dev/skills.git#<compatible-plugin-commit>"
+    mise use --global --pin "github:fullmeta-dev/skills@<release>"
+
+  In the global mise config the CLI is an ordinary tool table:
+    [tools."github:fullmeta-dev/skills"]
+    version = "<release>"
+    bin = "skills"
+
+  No task wrapper or repeated [plugins] entry is required. Once a release
+  exists, `skills self-update` installs the latest compatible pair.
+
+Sources (list and use):
+  owner/repository          GitHub shorthand
+  github:owner/repository   explicit GitHub source
+  git:https://host/o/r.git  explicit Git source (https, ssh, or file URL)
+  path:DIR or plain DIR     local directory
+  list resolves relative local paths from the working directory; use resolves
+  them from the selected config's directory. A bare value that looks like
+  owner/repository is read as GitHub shorthand even when a matching directory
+  exists; write ./dir or path:dir to force a local directory.
+
+Selectors:
+  name or alias      basename, frontmatter name, or catalog alias
+  tag:web            requires tag web
+  tag:web+frontend   requires both tags
+  skills/name        repository-relative skill-directory path
+  'skills/**'        repository-relative glob (quote globs in the shell)
+
+  Includes are ORed; tags joined with + are ANDed; excludes always win.
+  No includes selects every discovered skill (subject to excludes). Ambiguous
+  bare selectors use the lexically first path; list --explain shows the
+  decision. Missing selectors are reported by list (text and --explain) and do
+  not fail selection. list accepts positional
+  selectors and repeated --include/--exclude; use takes positional includes.
+
+Configuration written by use:
+  skills use fullmeta-dev/skills mise --agent pi
+
+  [tools."skills:fullmeta-dev/skills"]
+  source = "github:fullmeta-dev/skills"
+  version = "rev:<resolved-40-character-commit>"
+  track = "<resolved-branch>"
+  include = ["mise"]
+  agents = ["pi"]
+
+  [hooks]
+  postinstall = ["skills sync --locked"]
+
+  version is rev:<full-commit> for Git sources and tree-<sha256> for local
+  sources. track records update intent; install and sync never follow it.
+  include is written only when selectors are given. --subpath writes
+  source_subpath = "relative/directory". exclude = ["tag:experimental"] is
+  supported but must be added to the tool table by hand. A global or --path
+  declaration writes the matching --global/--path flags into the hook, because
+  mise runs postinstall hooks in the current project directory. Existing hooks
+  are preserved and the sync action is added once.
+
+Agents (project -> global):
+  agents, codex, cursor -> .agents/skills  -> ~/.agents/skills
+  pi                    -> .pi/skills      -> ~/.pi/agent/skills
+  claude                -> .claude/skills  -> ~/.claude/skills
+
+Scope:
+  Config commands default to the nearest ancestor mise.toml, or ./mise.toml.
+  --global selects the user config (~/.config/mise/config.toml by default).
+  --path PATH selects a file, or mise.toml inside a directory.
+  --env ENV (or MISE_ENV) inserts .ENV before the extension:
+  mise.toml -> mise.development.toml, config.toml -> config.development.toml.
+  --global and --path are mutually exclusive; --env combines with either.
+  self-update defaults to global. --path alone does not select global agent
+  targets; --global does.
+  Commit shared project/profile configs. Select machine-local files with
+  --path mise.local.toml and normally gitignore them.
+
+Lifecycle:
+  list -> use -> install -> status
+  use edits config only; it never installs or activates.
+  upgrade refreshes existing pins; run install afterward to activate.
+  install runs normal mise install for the whole config, then syncs links.
+  sync repairs owned links from already-installed artifacts; it never
+  installs, fetches updates, or follows tracks.
+  remove edits policy, syncs, and may uninstall an unreferenced artifact.
+  prune removes stale owned links and never creates desired links.
+
+Ownership and safety:
+  Activation creates relative symlinks named by skill into immutable mise
+  installations. Ownership is recorded per config directory under
+  $MISE_STATE_DIR/skills/ (not per filename or environment).
+  Unmanaged files, directories, symlinks, and changed managed links are
+  collisions: they are never overwritten or adopted. Link collisions are
+  reported as warnings and may not fail the command; confirm with status --json.
+  Executable collisions are separate: install refuses a foreign `skills` on
+  PATH or in mise ownership unless --accept-collision is given. No executable
+  is ever deleted automatically. Generated links are listed in the project's
+  .git/info/exclude so they do not appear in git status (a linked worktree is
+  left alone because it shares info/exclude); they are machine-specific and
+  must not be committed.
+
+Diagnostics:
+  validate (alias check) checks local sources for strict Agent Skills
+  conformance; the intentional top-level tags extension is reported but does
+  not fail normal discovery.
+  doctor (read-only) compares PATH and mise owners with the running binary;
+  absence of diagnostics is not proof every inspection succeeded.
+  self-update installs the latest compatible CLI/backend pair; --dry-run still
+  inspects the release and compatibility manifest. Set SKILLS_RELEASE_API or
+  SKILLS_COMPATIBILITY_MANIFEST to local JSON fixtures for offline runs.
+
+Examples:
+  skills list fullmeta-dev/skills --json --explain
+  skills list fullmeta-dev/skills --include 'skills/**' --exclude tag:experimental
+  skills use fullmeta-dev/skills mise --agent pi --agent claude
+  skills install && skills status --json
+  skills upgrade && skills install
+  skills use --env development fullmeta-dev/skills mise --agent agents
+  skills sync --locked
+  skills doctor --global
+  skills self-update --dry-run
+  skills remove skills:fullmeta-dev/skills mise
+  skills prune"#
 )]
 struct Cli {
     #[command(subcommand)]
@@ -36,65 +163,65 @@ struct Cli {
 enum Command {
     /// List discovered skills, optionally applying selectors.
     #[command(
-        after_help = "Normal: read-only discovery. SOURCE accepts path:DIR, a local directory, owner/repository, github:owner/repository, or git/https/ssh/file URL. Remote sources are fetched at an immutable commit into a temporary checkout and deleted after listing. Use --track BRANCH_OR_TAG or --reference REF to choose the read-only revision; neither edits config. Output includes names, descriptions, tags, aliases, files, source, resolved revision, and selector explanations. Failure: malformed metadata, unsafe links, or unavailable refs return non-zero without editing files. Scope: source only; no config is read or changed. Example: skills list fullmeta-dev/skills --json --explain"
+        after_help = "Normal: read-only discovery; no config is read or changed. SOURCE is required (path:DIR, a local directory, owner/repository, github:owner/repository, or git/https/ssh/file URL). Selectors are optional; with none, every discovered skill is listed. Remote sources are fetched at an immutable commit into a temporary checkout and removed after listing. Without --track or --reference, Git sources use the remote default branch. Text output lists names, descriptions, tags, aliases, source, and revision; --json adds artifact files and selector data, --tree renders artifact files, and --explain explains shadowing and selector decisions. Missing selectors are reported in text output (JSON carries them as data without a warning); they never fail selection. Failure: malformed metadata, unsafe links, or unavailable refs return non-zero without editing files. Example: skills list fullmeta-dev/skills --json --explain"
     )]
     List(ListArgs),
     /// Declare a source and selected skills, resolving its immutable pin.
     #[command(
-        after_help = "Normal: writes a source declaration, selectors, agents, and a direct postinstall sync hook to the selected mise config. SOURCE accepts path:DIR, a local directory, owner/repository, github:owner/repository, or git/https/ssh/file URL. Use `skills list SOURCE` first to inspect names, descriptions, tags, aliases, and files. Git sources resolve a full commit; local sources resolve a tree pin. Agents are agents/codex/cursor (.agents/skills), pi (.pi/skills), or claude (.claude/skills), with global equivalents. Failure: invalid source, selector policy, agent, ref, or config leaves the file unchanged. Scope: project by default, --global, --path PATH, or --env ENV. Example: skills use fullmeta-dev/skills mise --agent pi --agent claude"
+        after_help = "Normal: writes a source declaration, selectors, agents, and a direct postinstall sync hook to the selected mise config. SOURCE and at least one --agent are required. Positional selectors replace the include list when supplied and preserve it when omitted; a new declaration with no selectors selects every discovered skill. Supplied agents replace the recorded agent list. Git sources resolve a full commit; local sources resolve a tree digest. use edits config only: it never installs or activates. Run skills list first to inspect matches; use records selectors without checking that they match. --locked requires an existing declaration of the same source and subpath and preserves its version and track. --reference resolves a ref now and records it as track; --track does the same for a branch or tag. Failure: an invalid source, agent, ref, or config value returns non-zero before saving config. Scope: project by default, --global, --path PATH, or --env ENV. Example: skills use fullmeta-dev/skills mise --agent pi --agent claude"
     )]
     Use(UseArgs),
     /// Refresh immutable pins for declared sources. This never installs or syncs.
     #[command(
-        after_help = "Normal: resolves each declared source's explicit track and changes only its immutable version. Without --locked, this is the only command that follows track. Failure: an undeclared tool, invalid source, or unavailable ref returns non-zero and does not install or sync. Scope: project by default, or --global/--path/--env. Example: skills upgrade skills:fullmeta-dev/skills"
+        after_help = "Normal: with no TOOL arguments, refreshes every skills declaration; otherwise only the named tool keys, with or without the skills: prefix. Git sources resolve their stored track, or the default branch when absent; local sources recompute the tree digest. Only changed version fields are saved, after every requested refresh succeeds. upgrade never installs or syncs; run skills install afterward to activate. --locked checks the requested declarations without resolving or changing any version. Failure: an undeclared tool, invalid source, or unavailable ref returns non-zero without installing or syncing. Scope: project by default, or --global/--path/--env. Example: skills upgrade skills:fullmeta-dev/skills"
     )]
     Upgrade(UpgradeArgs),
     /// Install selected configuration tools through normal mise, then sync links.
     #[command(
-        after_help = "Normal: runs normal mise install for every tool in the selected config (including non-skill tools), then directly runs locked sync to activate owned links. Failure: install or link errors are reported; unmanaged targets and unrelated TOML remain untouched. Scope: project by default, --global, --path PATH, or --env ENV. Example: skills install --env development"
+        after_help = "Normal: runs normal mise install for every tool in the selected config (including non-skill tools), then directly runs locked sync to activate owned links. No positional tools are accepted. Source pins never move. --dry-run previews the mise installation and skips the direct sync; collision checks still run. --accept-collision bypasses only the public executable-owner check, never skill-link ownership. Failure: installation errors return non-zero and earlier installed artifacts may remain. Link collisions may only warn; inspect skills status --json. Scope: project by default, --global, --path PATH, or --env ENV. Example: skills install --env development"
     )]
     Install(InstallArgs),
     /// Update the CLI and its compatible backend as one safe pair.
     #[command(
         name = "self-update",
-        after_help = "Normal: discovers the latest release asset, installs the selected CLI release, updates its pinned backend, and commits config only after both succeed. --dry-run prints the pair and config plan without installing or editing. Failure: the old config and backend declaration remain usable. Scope: global by default, or --path/--env. Example: skills self-update"
+        after_help = "Normal: discovers the latest release's release-compatibility.json asset, checks minimum mise and executable ownership, installs the CLI, updates the installed skills backend plugin, then saves the selected config only after both succeed. Requires an existing [tools.\"github:fullmeta-dev/skills\"] table with version and bin = \"skills\"; this is not a bootstrap command. Default scope is global; --version must name an entry in the compatibility manifest. --dry-run still inspects the release and manifest but installs and edits nothing. Failure: returns non-zero and retains the old config; backend restoration is attempted and rollback failures are reported. Set SKILLS_RELEASE_API or SKILLS_COMPATIBILITY_MANIFEST to local JSON fixtures for offline runs. Example: skills self-update --dry-run"
     )]
     SelfUpdate(SelfUpdateArgs),
     /// Diagnose executable collisions and selected mise ownership.
     #[command(
-        after_help = "Normal: reports PATH and mise ownership for the public skills executable without changing files. Failure: unavailable inspection commands are reported. Scope: selected project/global mise config. Example: skills doctor --global"
+        after_help = "Normal: read-only. Reports the effective config and environment and compares PATH and mise owners with the running executable; it does not inspect or repair skill-link collisions. Detected owner differences are informational. Failure: unreadable or invalid selected config returns non-zero. An unsuccessful mise ownership inspection may be omitted, so absence of diagnostics is not proof every inspection succeeded. Scope: selected project/global mise config. Example: skills doctor --global"
     )]
     Doctor(DoctorArgs),
     /// Converge the selected configuration without following update tracks.
     #[command(
-        after_help = "Normal: verifies installed immutable artifacts and repairs only links owned by this config root; --locked forbids version resolution. Failure: missing artifacts, local drift, unsafe links, or conflicts are reported and unmanaged targets remain untouched. Scope: project by default, or --global/--path/--env. Example: skills sync --locked"
+        after_help = "Normal: verifies installed immutable artifacts and converges links owned by this config root. It never installs, fetches updates, or follows tracks. It creates missing desired links, updates unchanged owned links, removes stale owned links, and writes ownership state. Missing or invalid artifacts and local-source drift return non-zero; run install, or use/upgrade then install. --locked is accepted for the generated postinstall hook; sync never resolves versions, so it does not change behavior. Unmanaged or changed targets are left untouched and reported as warnings. Scope: project by default, or --global/--path/--env. Example: skills sync --locked"
     )]
     Sync(SyncArgs),
     /// Show declared skill sources and their link state.
     #[command(
-        after_help = "Normal: reports declarations, immutable versions, source selection, and active, missing, dangling, or conflicting links without changing files. Use it after `skills install` to confirm what is active. Failure: invalid config data returns non-zero. Scope: selected project/global/environment mise config. Example: skills status --global --json"
+        after_help = "Normal: reports declarations, immutable versions, source selection, and link state without changing files. Text output is tab-separated; --json emits config, environment, tools, links, and diagnostics. Link states are active, missing, dangling, conflict, and unowned (the desired symlink exists but this root did not record it). Missing artifacts, drift, and unhealthy links can appear as diagnostics with exit status 0; success is not proof of a healthy state. Malformed config or ownership state returns non-zero; a declaration whose source or version cannot be resolved is reported as a diagnostic with exit status 0. Example: skills status --global --json"
     )]
     Status(StatusArgs),
     /// Remove a declaration or selected entries from its include policy.
     #[command(
-        after_help = "Normal: removes selected includes or the whole declaration, syncs owned links, and delegates normal mise artifact removal only when unreferenced. Failure: unknown tools, selectors, or changed unmanaged links are reported without deleting unrelated targets. Scope: project by default, or --global/--path/--env. Example: skills remove skills:fullmeta-dev/skills mise"
+        after_help = "Normal: removes the named stored include selectors (exact strings, not skill matches); omit selectors to remove the whole declaration. Removing the last include removes the declaration rather than selecting all. Config is saved before sync and artifact removal, so a later failure can leave the declaration changed. Artifacts are retained while another declaration in the selected config or the current project/global scopes references the same source+version. Failure: an unknown tool, or a request whose stored selectors all fail to match, returns non-zero; changed unmanaged links are reported and unrelated targets are untouched. Scope: project by default, or --global/--path/--env. Example: skills remove skills:fullmeta-dev/skills mise"
     )]
     Remove(RemoveArgs),
     /// Remove stale links recorded for the selected configuration root.
     #[command(
-        after_help = "Normal: removes only stale links recorded for this config root and never materializes desired links. Failure: changed or unmanaged targets are reported and left untouched. Scope: project by default, or --global/--path/--env. Example: skills prune --global"
+        after_help = "Normal: removes only stale links recorded for this config root; it never creates desired links and never changes declarations or installed artifacts. If desired links cannot be determined, links for still-declared tools are retained conservatively. Changed or unmanaged targets are retained with warnings. Failure: config/ownership or filesystem errors return non-zero. Scope: project by default, or --global/--path/--env. Example: skills prune --global"
     )]
     Prune(PruneArgs),
     /// Report strict Agent Skills conformance without blocking normal use.
     #[command(
         visible_alias = "check",
-        after_help = "Normal: prints non-blocking diagnostics for strict Agent Skills consumers; the intentional top-level tags extension is reported but remains valid for normal discovery and installation. Failure: unreadable sources or ordinary discovery errors return non-zero. Scope: source and optional --subpath only; no config, network, or installation side effects. Example: skills validate path:../skills-source --json"
+        after_help = "Normal: checks local sources for strict Agent Skills conformance without blocking normal discovery. SOURCE is required and must be a local directory (an optional path: prefix is accepted); GitHub shorthand and Git URLs are not fetched. Relative paths use the working directory. The intentional top-level tags extension is reported but does not fail ordinary discovery. Exit 0 means ordinary discovery succeeded even when strict-only diagnostics exist. --json emits source and diagnostics. Failure: unreadable sources or ordinary discovery errors return non-zero. Alias: check. Example: skills validate path:../skills-source --json"
     )]
     Validate(ValidateArgs),
     /// Generate a completion script for one supported shell.
     #[command(
         visible_alias = "completion",
-        after_help = "Normal: writes a completion script to stdout and never edits config or contacts a source. Failure: unsupported shells are rejected before output. Scope: shell argument only; no project or global config is read. Example: skills completions bash > ~/.local/share/bash-completion/completions/skills"
+        after_help = "Normal: writes a completion script for SHELL (bash, zsh, fish, or powershell) to stdout; shell redirection creates or replaces the chosen file, so create its parent directory first. It never edits config or contacts a source. Failure: unsupported shells are rejected before output. Alias: completion. Example: mkdir -p ~/.local/share/bash-completion/completions && skills completions bash > ~/.local/share/bash-completion/completions/skills"
     )]
     Completions(CompletionsArgs),
 }
@@ -104,10 +231,10 @@ struct ScopeArgs {
     /// Select mise's environment-specific config (`mise.<env>.toml`).
     #[arg(long, env = "MISE_ENV", value_name = "ENV")]
     env: Option<String>,
-    /// Edit the user-owned global mise config.
+    /// Select the user-owned global mise config.
     #[arg(long, conflicts_with = "path")]
     global: bool,
-    /// Edit this mise config file (or mise.toml inside a directory).
+    /// Select this mise config file (or mise.toml inside a directory).
     #[arg(long, value_name = "PATH", conflicts_with = "global")]
     path: Option<PathBuf>,
 }
@@ -130,6 +257,43 @@ impl ScopeArgs {
     fn is_global(&self) -> bool {
         self.global
     }
+
+    /// The direct postinstall hook for this scope. A global or explicit config
+    /// hook runs with mise's project directory as cwd, so it must name its
+    /// target instead of relying on the nearest project config.
+    fn postinstall_command(&self) -> String {
+        let mut command = String::from(config::POSTINSTALL_COMMAND);
+        if let Some(environment) = &self.env {
+            command.push_str(" --env ");
+            command.push_str(environment);
+        }
+        if self.global {
+            command.push_str(" --global");
+        } else if let Some(path) = &self.path {
+            let absolute = if path.is_absolute() {
+                path.clone()
+            } else {
+                std::env::current_dir()
+                    .map(|cwd| cwd.join(path))
+                    .unwrap_or_else(|_| path.clone())
+            };
+            command.push_str(" --path ");
+            command.push_str(&shell_quote(&absolute.display().to_string()));
+        }
+        command
+    }
+}
+
+fn shell_quote(value: &str) -> String {
+    if !value.is_empty()
+        && value.chars().all(|character| {
+            character.is_ascii_alphanumeric()
+                || matches!(character, '/' | '.' | '_' | '-' | ':' | '~' | '+' | '=')
+        })
+    {
+        return value.to_string();
+    }
+    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 #[derive(Debug, Args)]
@@ -171,7 +335,7 @@ struct UseArgs {
     scope: ScopeArgs,
     /// Source (`owner/repository`, `github:...`, `git:...`, or `path:...`).
     source: String,
-    /// Skills to include. An omitted list keeps an existing selection policy.
+    /// Optional include selectors; omit to keep an existing selection policy.
     selectors: Vec<String>,
     /// Agent adapters to record in the declaration.
     #[arg(long = "agent", required = true, num_args = 1..)]
@@ -179,10 +343,10 @@ struct UseArgs {
     /// Source-relative skill directory, validated against traversal.
     #[arg(long, alias = "source-subpath")]
     subpath: Option<String>,
-    /// Branch or tag to resolve. Defaults to the remote's default branch.
+    /// Branch or tag to resolve now and record as track. Defaults to the remote's default branch.
     #[arg(long, conflicts_with = "reference")]
     track: Option<String>,
-    /// Explicit Git ref to resolve once.
+    /// Git ref or full commit to resolve now and record as track.
     #[arg(long, conflicts_with = "track")]
     reference: Option<String>,
     /// Do not resolve or rewrite an existing immutable version.
@@ -208,7 +372,7 @@ struct InstallArgs {
     /// Require mise's existing lockfile data without resolving tool URLs.
     #[arg(long)]
     locked: bool,
-    /// Show normal mise installation work without changing files.
+    /// Preview normal mise installation without changing files; skips the direct sync.
     #[arg(long)]
     dry_run: bool,
     /// Explicitly accept an unrelated existing `skills` executable.
@@ -262,7 +426,7 @@ struct DoctorArgs {
 struct SyncArgs {
     #[command(flatten)]
     scope: ScopeArgs,
-    /// Validate and converge using only already-declared immutable versions.
+    /// Accepted for the generated postinstall hook; sync never resolves versions.
     #[arg(long)]
     locked: bool,
 }
@@ -598,6 +762,7 @@ fn use_command(args: UseArgs) -> Result<(String, String, PathBuf), String> {
         track.as_deref(),
         &args.selectors,
         &args.agents,
+        &args.scope.postinstall_command(),
     )?;
     config.save_if_changed(&before)?;
     Ok((format!("skills:{}", source.key), version, config.path))
@@ -686,6 +851,9 @@ fn run_install(args: InstallArgs) -> ExitCode {
         );
         for conflict in report.conflicts {
             eprintln!("warning: {conflict}");
+        }
+        for warning in report.warnings {
+            eprintln!("warning: {warning}");
         }
         Ok(())
     }) {
@@ -1198,6 +1366,9 @@ fn run_sync(args: SyncArgs) -> ExitCode {
         for conflict in report.conflicts {
             eprintln!("warning: {conflict}");
         }
+        for warning in report.warnings {
+            eprintln!("warning: {warning}");
+        }
         Ok(())
     }) {
         Ok(()) => ExitCode::SUCCESS,
@@ -1274,6 +1445,9 @@ fn remove_command(args: RemoveArgs) -> Result<(bool, PathBuf), String> {
     let report = lifecycle::sync(&config, args.scope.is_global())?;
     for conflict in report.conflicts {
         eprintln!("warning: {conflict}");
+    }
+    for warning in report.warnings {
+        eprintln!("warning: {warning}");
     }
 
     // Partial selector removal leaves the declaration (and therefore its
@@ -1380,6 +1554,9 @@ fn run_prune(args: PruneArgs) -> ExitCode {
         );
         for conflict in report.conflicts {
             eprintln!("warning: {conflict}");
+        }
+        for warning in report.warnings {
+            eprintln!("warning: {warning}");
         }
         Ok(())
     }) {

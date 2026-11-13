@@ -1,5 +1,6 @@
 use crate::config::{Config, ToolInfo};
 use crate::source::{canonical_version, local_pin, validate_subpath, SourceKind, SourceSpec};
+use fslock::LockFile;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use skills::discover_with_subpath;
@@ -24,8 +25,13 @@ pub struct OwnedLink {
 struct OwnershipManifest {
     schema_version: u32,
     config_root: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     links: Vec<OwnedLink>,
+    /// Canonical git-exclude roots this config has touched. Recorded so a sync
+    /// whose exclude cleanup failed can clear the block on a later run, even
+    /// after every link has been removed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    git_exclude_roots: Vec<String>,
 }
 
 impl Default for OwnershipManifest {
@@ -34,6 +40,7 @@ impl Default for OwnershipManifest {
             schema_version: 1,
             config_root: String::new(),
             links: Vec::new(),
+            git_exclude_roots: Vec::new(),
         }
     }
 }
@@ -53,6 +60,7 @@ pub struct SyncReport {
     pub linked: usize,
     pub removed: usize,
     pub conflicts: Vec<String>,
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -144,11 +152,14 @@ pub fn validate_agent(value: &str) -> Result<(), String> {
 }
 
 pub fn sync(config: &Config, global: bool) -> Result<SyncReport, String> {
+    // Serialize this config root's lifecycle so concurrent syncs cannot
+    // interleave link, manifest, and git-exclude writes. Released on return.
+    let _lock = lock_config_root(&config.root)?;
     let manifest = load_manifest(&config.root, global)?;
     let desired = desired_links(config, global)?;
     let snapshots = link_snapshots(&manifest, &desired);
     let manifest_snapshot = snapshot_manifest_file(&config.root)?;
-    match sync_changes(config, manifest, desired) {
+    match sync_changes(config, global, manifest, desired) {
         Ok(report) => Ok(report),
         Err(error) => Err(rollback_error(error, &snapshots, &manifest_snapshot)),
     }
@@ -156,10 +167,17 @@ pub fn sync(config: &Config, global: bool) -> Result<SyncReport, String> {
 
 fn sync_changes(
     config: &Config,
+    global: bool,
     mut manifest: OwnershipManifest,
     desired: BTreeMap<LinkKey, DesiredLink>,
 ) -> Result<SyncReport, String> {
     let mut report = SyncReport::default();
+    let previous = manifest.links.clone();
+    let previous_roots: Vec<PathBuf> = manifest
+        .git_exclude_roots
+        .iter()
+        .map(PathBuf::from)
+        .collect();
     let old_links: BTreeMap<LinkKey, OwnedLink> = manifest
         .links
         .iter()
@@ -218,10 +236,31 @@ fn sync_changes(
             .cmp(&right.adapter)
             .then_with(|| left.target.cmp(&right.target))
     });
-    save_manifest(&config.root, &manifest).map(|_| report)
+    save_manifest(&config.root, &manifest)?;
+    let next: Vec<OwnedLink> = manifest.links.clone();
+    let roots = exclude_roots(global, &previous_roots, &previous, &next);
+    manifest.git_exclude_roots = roots
+        .iter()
+        .map(|root| root.display().to_string())
+        .collect();
+    save_manifest(&config.root, &manifest)?;
+    match update_git_excludes(global, &roots, &next) {
+        Ok(()) => {
+            if !manifest.git_exclude_roots.is_empty() {
+                manifest.git_exclude_roots.clear();
+                if let Err(error) = save_manifest(&config.root, &manifest) {
+                    report.warnings.push(error);
+                }
+            }
+        }
+        Err(error) => report.warnings.push(error),
+    }
+    Ok(report)
 }
 
 pub fn prune(config: &Config, global: bool) -> Result<SyncReport, String> {
+    // Serialize this config root's lifecycle; see `sync`.
+    let _lock = lock_config_root(&config.root)?;
     let manifest = load_manifest(&config.root, global)?;
     let desired_result = desired_links_report(config, global);
     let declared_tools = crate::config::skill_tools(&config.document)?;
@@ -230,6 +269,7 @@ pub fn prune(config: &Config, global: bool) -> Result<SyncReport, String> {
     let manifest_snapshot = snapshot_manifest_file(&config.root)?;
     match prune_changes(
         config,
+        global,
         manifest,
         desired_result,
         declared_tools,
@@ -242,12 +282,19 @@ pub fn prune(config: &Config, global: bool) -> Result<SyncReport, String> {
 
 fn prune_changes(
     config: &Config,
+    global: bool,
     mut manifest: OwnershipManifest,
     desired_result: DesiredReport,
     declared_tools: Vec<ToolInfo>,
     desired_keys: BTreeSet<LinkKey>,
 ) -> Result<SyncReport, String> {
     let mut report = SyncReport::default();
+    let previous = manifest.links.clone();
+    let previous_roots: Vec<PathBuf> = manifest
+        .git_exclude_roots
+        .iter()
+        .map(PathBuf::from)
+        .collect();
     let mut next_links = BTreeMap::new();
     for link in manifest.links {
         let key = LinkKey {
@@ -277,7 +324,26 @@ fn prune_changes(
             .cmp(&right.adapter)
             .then_with(|| left.target.cmp(&right.target))
     });
-    save_manifest(&config.root, &manifest).map(|_| report)
+    save_manifest(&config.root, &manifest)?;
+    let next: Vec<OwnedLink> = manifest.links.clone();
+    let roots = exclude_roots(global, &previous_roots, &previous, &next);
+    manifest.git_exclude_roots = roots
+        .iter()
+        .map(|root| root.display().to_string())
+        .collect();
+    save_manifest(&config.root, &manifest)?;
+    match update_git_excludes(global, &roots, &next) {
+        Ok(()) => {
+            if !manifest.git_exclude_roots.is_empty() {
+                manifest.git_exclude_roots.clear();
+                if let Err(error) = save_manifest(&config.root, &manifest) {
+                    report.warnings.push(error);
+                }
+            }
+        }
+        Err(error) => report.warnings.push(error),
+    }
+    Ok(report)
 }
 
 pub fn status(config: &Config, global: bool) -> Result<StatusReport, String> {
@@ -505,6 +571,84 @@ fn restore_manifest_file(snapshot: &ManifestFileSnapshot) -> Result<(), String> 
             )),
         },
     }
+}
+
+/// The canonical adapter roots whose git-exclude blocks this config may need to
+/// write or clear: previously recorded roots, plus the parents of every link it
+/// owned before and owns now. Global links live under HOME and are never
+/// excluded.
+fn exclude_roots(
+    global: bool,
+    recorded: &[PathBuf],
+    previous: &[OwnedLink],
+    next: &[OwnedLink],
+) -> BTreeSet<PathBuf> {
+    if global {
+        return BTreeSet::new();
+    }
+    let mut roots: BTreeSet<PathBuf> = recorded.iter().cloned().collect();
+    for link in previous.iter().chain(next.iter()) {
+        if let Some(root) = Path::new(&link.target).parent() {
+            roots.insert(canonical_root(root));
+        }
+    }
+    roots
+}
+
+/// Rewrite the clone-local git-exclude blocks for `roots`. A name is excluded
+/// only while its target is still the owned symlink, so a link replaced by
+/// handwritten content stays visible. Roots with no owned names get an empty
+/// set, which clears their block.
+fn update_git_excludes(
+    global: bool,
+    roots: &BTreeSet<PathBuf>,
+    next: &[OwnedLink],
+) -> Result<(), String> {
+    if global {
+        return Ok(());
+    }
+    let mut names: BTreeMap<PathBuf, BTreeSet<String>> = roots
+        .iter()
+        .cloned()
+        .map(|root| (root, BTreeSet::new()))
+        .collect();
+    for link in next {
+        let target = Path::new(&link.target);
+        let ours = matches!(
+            symlink_target(target),
+            TargetState::Symlink(actual) if actual == Path::new(&link.link)
+        );
+        if !ours {
+            continue;
+        }
+        if let Some(root) = target.parent() {
+            if let Some(name) = target.file_name().and_then(|name| name.to_str()) {
+                names
+                    .entry(canonical_root(root))
+                    .or_default()
+                    .insert(name.to_string());
+            }
+        }
+    }
+    let mut errors = Vec::new();
+    for (root, names) in names {
+        let names: Vec<String> = names.into_iter().collect();
+        if let Err(error) = crate::git_exclude::exclude_links(&root, &names) {
+            errors.push(error);
+        }
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "could not update git excludes: {}",
+            errors.join("; ")
+        ))
+    }
+}
+
+fn canonical_root(root: &Path) -> PathBuf {
+    fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf())
 }
 
 fn desired_links(config: &Config, global: bool) -> Result<BTreeMap<LinkKey, DesiredLink>, String> {
@@ -1153,6 +1297,34 @@ fn state_manifest_path(config_root: &Path) -> Result<PathBuf, String> {
     Ok(state.join("skills").join(format!("{hash}.json")))
 }
 
+fn lock_config_root(config_root: &Path) -> Result<LockFile, String> {
+    // Keep locks beside, not inside, the ownership manifests so tools that
+    // enumerate `state/skills` see only manifests.
+    let manifest = state_manifest_path(config_root)?;
+    let state = manifest
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(|| "cannot determine skills state directory".to_string())?;
+    let hash = manifest
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .ok_or_else(|| "cannot determine skills state hash".to_string())?;
+    let path = state.join("skills-locks").join(format!("{hash}.lock"));
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "cannot create state directory {}: {error}",
+                parent.display()
+            )
+        })?;
+    }
+    let mut lock = LockFile::open(&path)
+        .map_err(|error| format!("cannot open skills state lock {}: {error}", path.display()))?;
+    lock.lock()
+        .map_err(|error| format!("cannot lock skills state {}: {error}", path.display()))?;
+    Ok(lock)
+}
+
 fn load_manifest(config_root: &Path, global: bool) -> Result<OwnershipManifest, String> {
     let path = state_manifest_path(config_root)?;
     let manifest = match fs::read_to_string(&path) {
@@ -1351,7 +1523,7 @@ fn save_manifest(config_root: &Path, manifest: &OwnershipManifest) -> Result<(),
         return Err("injected ownership manifest persistence failure".into());
     }
     let path = state_manifest_path(config_root)?;
-    if manifest.links.is_empty() {
+    if manifest.links.is_empty() && manifest.git_exclude_roots.is_empty() {
         match fs::remove_file(&path) {
             Ok(()) => return Ok(()),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -1460,6 +1632,7 @@ mod tests {
                 version: "tree-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                     .into(),
             }],
+            git_exclude_roots: Vec::new(),
         };
         validate_ownership_manifest(&valid, &config_root, false).unwrap();
 
