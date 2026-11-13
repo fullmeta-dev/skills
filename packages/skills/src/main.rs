@@ -154,7 +154,8 @@ Diagnostics:
 Caching (list):
   Remote sources are fetched at an immutable commit. Checkouts are cached
   under $SKILLS_CACHE_DIR (else $MISE_CACHE_DIR/skills, else
-  ~/.cache/skills) and reused forever because a revision cannot change.
+  $XDG_CACHE_HOME/skills, else ~/.cache/skills) and reused forever because a
+  revision cannot change.
   Resolved refs are cached for SKILLS_CACHE_TTL seconds (default 300).
   --refresh re-resolves refs; SKILLS_NO_CACHE disables caching entirely;
   `skills cache` reports or cleans the cache.
@@ -219,7 +220,7 @@ enum Command {
     Sync(SyncArgs),
     /// Show declared skill sources and their link state.
     #[command(
-        after_help = "Normal: reports declarations, immutable versions, source selection, and link state without changing files. Text output is tab-separated; --json emits config, environment, tools, links, and diagnostics. Link states are active, missing, dangling, conflict, and unowned (the desired symlink exists but this root did not record it). Missing artifacts, drift, and unhealthy links can appear as diagnostics with exit status 0; success is not proof of a healthy state. Malformed config or ownership state returns non-zero; a declaration whose source or version cannot be resolved is reported as a diagnostic with exit status 0. Example: skills status --global --json"
+        after_help = "Normal: reports declarations, immutable versions, source selection, and link state without changing files. Text output groups config, environment, tools, and links; --json emits the same fields plus diagnostics for machines. Link states are active, missing, dangling, conflict, and unowned (the desired symlink exists but this root did not record it). Missing artifacts, drift, and unhealthy links can appear as diagnostics with exit status 0; success is not proof of a healthy state. Malformed config or ownership state returns non-zero; a declaration whose source or version cannot be resolved is reported as a diagnostic with exit status 0. Example: skills status --global --json"
     )]
     Status(StatusArgs),
     /// Remove a declaration or selected entries from its include policy.
@@ -234,7 +235,7 @@ enum Command {
     Prune(PruneArgs),
     /// Inspect or clean the immutable source cache used by list.
     #[command(
-        after_help = "Normal: read-only unless --clean is given. Reports the cache directory, the number of cached resolved refs and checkouts, and their size. --clean removes the whole cache directory (pins, checkouts, and scratch space); it never touches mise installations, config, or activated links. The directory is $SKILLS_CACHE_DIR, else $MISE_CACHE_DIR/skills, else ~/.cache/skills. --json emits the same fields as JSON. Failure: an unreadable or unwritable cache directory returns non-zero. Example: skills cache --clean"
+        after_help = "Normal: read-only unless --clean is given. Reports the cache directory, the number of cached resolved refs and checkouts, and their size. --clean removes the whole cache directory (pins, checkouts, and scratch space); it never touches mise installations, config, or activated links. The directory is $SKILLS_CACHE_DIR, else $MISE_CACHE_DIR/skills, else $XDG_CACHE_HOME/skills, else ~/.cache/skills. --json emits the same fields as JSON. Failure: an unreadable or unwritable cache directory returns non-zero. Example: skills cache --clean"
     )]
     Cache(CacheArgs),
     /// Report strict Agent Skills conformance without blocking normal use.
@@ -572,6 +573,11 @@ const STYLES: Styles = Styles::styled()
 /// headings in every `after_help` block. clap strips the styling when output is
 /// not a terminal, so captured and piped help stays plain.
 fn typeset_help(command: clap::Command) -> clap::Command {
+    let command = match style::color_override() {
+        Some(true) => command.color(clap::ColorChoice::Always),
+        Some(false) => command.color(clap::ColorChoice::Never),
+        None => command,
+    };
     let command = command.styles(STYLES).mut_subcommands(typeset_help);
     let styled = command
         .get_after_help()
@@ -1804,6 +1810,9 @@ fn run_cache(args: CacheArgs) -> ExitCode {
         }
         return ExitCode::SUCCESS;
     }
+    if let Err(error) = cache.validate() {
+        return fail(error);
+    }
     let stats = cache.stats();
     if args.json {
         match serde_json::to_string_pretty(&stats) {
@@ -2050,7 +2059,7 @@ fn print_text(
             DiagnosticLevel::Error => "error",
             DiagnosticLevel::Warning => "warning",
         };
-        let level = style::level(level);
+        let level = style::level_stderr(level);
         if let Some(path) = &diagnostic.path {
             eprintln!(
                 "{level}: {}: {}",

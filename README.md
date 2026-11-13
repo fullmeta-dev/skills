@@ -59,7 +59,8 @@ at an immutable revision into a read-only checkout. Use `--track BRANCH_OR_TAG`
 or `--reference REF` to preview a particular revision without editing config.
 
 `list` caches remote checkouts by revision (a revision cannot change) under
-`$SKILLS_CACHE_DIR` (else `$MISE_CACHE_DIR/skills`, else `~/.cache/skills`),
+`$SKILLS_CACHE_DIR` (else `$MISE_CACHE_DIR/skills`, else
+`$XDG_CACHE_HOME/skills`, else `~/.cache/skills`),
 and caches resolved refs for `SKILLS_CACHE_TTL` seconds (default 300). Repeat
 listings of the same revision are then local. `--refresh` re-resolves refs
 instead of using the cached resolution, `SKILLS_NO_CACHE=1` disables caching,

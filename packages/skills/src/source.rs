@@ -238,10 +238,15 @@ pub fn prepare_discovery_source(
         });
     }
 
-    let base = cache.scratch_base()?;
+    let base = cache.scratch_base().unwrap_or_else(std::env::temp_dir);
     let scratch = tempfile::Builder::new()
         .prefix("skills-checkout-")
         .tempdir_in(&base)
+        .or_else(|_| {
+            tempfile::Builder::new()
+                .prefix("skills-checkout-")
+                .tempdir()
+        })
         .map_err(|error| format!("cannot create source checkout: {error}"))?;
     run_git_in(scratch.path(), &["init", "--quiet"])?;
     run_git_in(scratch.path(), &["remote", "add", "origin", &url])?;

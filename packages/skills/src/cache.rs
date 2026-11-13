@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const DEFAULT_TTL_SECONDS: u64 = 300;
-const MARKER_SUFFIX: &str = ".ok";
+const MARKER_NAME: &str = ".skills-cache-ok";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PinRecord {
@@ -126,44 +126,44 @@ impl Cache {
     /// A previously published checkout for this exact immutable revision.
     pub fn cached_checkout(&self, url: &str, revision: &str) -> Option<PathBuf> {
         let dir = self.checkout_dir(url, revision)?;
-        marker_for(&dir).is_file().then_some(dir)
+        (dir.is_dir() && dir.join(MARKER_NAME).is_file()).then_some(dir)
     }
 
     /// Move a fully built checkout into the cache. Returns the cache path on
     /// success, or `None` when caching is unavailable (the caller keeps its
     /// temporary directory).
+    ///
+    /// The completion marker is written inside the built directory and travels
+    /// with it through one atomic rename, so a concurrent reader never sees a
+    /// published path before its contents exist. A losing publisher keeps the
+    /// winner's directory instead of deleting its marker.
     pub fn publish_checkout(&self, url: &str, revision: &str, built: &Path) -> Option<PathBuf> {
         let dir = self.checkout_dir(url, revision)?;
-        let marker = marker_for(&dir);
         let parent = dir.parent()?;
         if fs::create_dir_all(parent).is_err() {
             return None;
         }
-        if fs::write(&marker, b"ok\n").is_err() {
+        if fs::write(built.join(MARKER_NAME), b"ok\n").is_err() {
             return None;
         }
         if fs::rename(built, &dir).is_err() {
-            let _ = fs::remove_file(&marker);
-            // A concurrent run may have published the same revision first.
+            // Another run may have published the same revision first, or the
+            // rename failed (for example across filesystems). Trust only a
+            // complete published checkout.
             return self.cached_checkout(url, revision);
         }
         Some(dir)
     }
 
     /// A base directory on the same filesystem as the cache, so a finished
-    /// checkout can be renamed into place atomically. Falls back to the system
-    /// temporary directory when caching is unavailable.
-    pub fn scratch_base(&self) -> Result<PathBuf, String> {
-        let base = match &self.root {
-            Some(root) => {
-                let tmp = root.join("tmp");
-                fs::create_dir_all(&tmp)
-                    .map_err(|error| format!("cannot create cache directory: {error}"))?;
-                tmp
-            }
-            None => std::env::temp_dir(),
-        };
-        Ok(base)
+    /// checkout can be renamed into place atomically. `None` when caching is
+    /// disabled or the cache directory cannot be created; callers fall back to
+    /// the system temporary directory.
+    pub fn scratch_base(&self) -> Option<PathBuf> {
+        let root = self.root.as_ref()?;
+        let tmp = root.join("tmp");
+        fs::create_dir_all(&tmp).ok()?;
+        Some(tmp)
     }
 
     pub fn stats(&self) -> CacheStats {
@@ -202,7 +202,7 @@ impl Cache {
                 };
                 for revision in revisions.flatten() {
                     let path = revision.path();
-                    if path.is_dir() {
+                    if path.is_dir() && path.join(MARKER_NAME).is_file() {
                         stats.checkouts += 1;
                     }
                     stats.bytes += directory_size(&path);
@@ -212,7 +212,25 @@ impl Cache {
         stats
     }
 
+    /// Reject a cache root that exists but is not a directory, so `cache`
+    /// reports an invalid location instead of silently showing an empty cache.
+    pub fn validate(&self) -> Result<(), String> {
+        let Some(root) = &self.root else {
+            return Ok(());
+        };
+        match fs::metadata(root) {
+            Ok(metadata) if metadata.is_dir() => Ok(()),
+            Ok(_) => Err(format!("cache path is not a directory: {}", root.display())),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(format!(
+                "cannot inspect cache directory {}: {error}",
+                root.display()
+            )),
+        }
+    }
+
     pub fn clean(&self) -> Result<CacheStats, String> {
+        self.validate()?;
         let before = self.stats();
         let Some(root) = &self.root else {
             return Ok(before);
@@ -252,14 +270,12 @@ fn resolve_root() -> Option<PathBuf> {
     std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache").join("skills"))
 }
 
-fn marker_for(dir: &Path) -> PathBuf {
-    let mut marker = dir.as_os_str().to_os_string();
-    marker.push(MARKER_SUFFIX);
-    PathBuf::from(marker)
-}
-
 fn write_atomic(path: &Path, contents: &[u8]) -> std::io::Result<()> {
-    let temporary = path.with_extension("tmp");
+    // A unique temporary name per writer, so concurrent pin writers cannot
+    // truncate each other's in-progress file before the atomic rename.
+    let mut temporary = path.as_os_str().to_os_string();
+    temporary.push(format!(".{}.{}.tmp", std::process::id(), now_nanos()));
+    let temporary = PathBuf::from(temporary);
     fs::write(&temporary, contents)?;
     match fs::rename(&temporary, path) {
         Ok(()) => Ok(()),
@@ -293,6 +309,13 @@ fn now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
+        .unwrap_or(0)
+}
+
+fn now_nanos() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
         .unwrap_or(0)
 }
 
@@ -364,7 +387,10 @@ mod tests {
             Some(published.as_path())
         );
         // A checkout without its completion marker is not trusted.
+        let untrusted = cache.checkout_dir(url, "rev2").unwrap();
+        fs::create_dir_all(&untrusted).unwrap();
         assert!(cache.cached_checkout(url, "rev2").is_none());
+        assert!(cache.cached_checkout(url, "rev3").is_none());
         let stats = cache.stats();
         assert_eq!(stats.pins, 0);
         assert_eq!(stats.checkouts, 1);
@@ -372,5 +398,16 @@ mod tests {
         cache.clean().unwrap();
         assert!(cache.cached_checkout(url, "rev1").is_none());
         assert_eq!(cache.stats().checkouts, 0);
+    }
+
+    #[test]
+    fn validate_rejects_a_non_directory_root() {
+        let temp = TempDir::new().unwrap();
+        let file = temp.path().join("file");
+        fs::write(&file, b"x").unwrap();
+        assert!(make_cache(&file, 300, false).validate().is_err());
+        assert!(make_cache(&temp.path().join("missing"), 300, false)
+            .validate()
+            .is_ok());
     }
 }

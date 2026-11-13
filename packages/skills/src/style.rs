@@ -16,8 +16,9 @@ enum Stream {
     Stderr,
 }
 
-/// Explicit user intent from the environment, if any.
-fn override_choice() -> Option<bool> {
+/// Explicit user intent from the environment, if any. Shared with clap so
+/// `--help` and command output agree.
+pub fn color_override() -> Option<bool> {
     if let Ok(value) = std::env::var("SKILLS_COLOR") {
         match value.trim().to_ascii_lowercase().as_str() {
             "always" | "force" | "yes" | "true" | "1" => return Some(true),
@@ -44,7 +45,7 @@ fn enabled(stream: Stream) -> bool {
         Stream::Stdout => &STDOUT,
         Stream::Stderr => &STDERR,
     };
-    *slot.get_or_init(|| match override_choice() {
+    *slot.get_or_init(|| match color_override() {
         Some(choice) => choice,
         None => match stream {
             Stream::Stdout => std::io::stdout().is_terminal(),
@@ -105,5 +106,13 @@ pub fn level(level: &str) -> String {
     match level {
         "error" => paint(Stream::Stdout, "1;31", level),
         _ => paint(Stream::Stdout, "1;33", level),
+    }
+}
+
+/// A diagnostic level rendered on stderr.
+pub fn level_stderr(level: &str) -> String {
+    match level {
+        "error" => paint(Stream::Stderr, "1;31", level),
+        _ => paint(Stream::Stderr, "1;33", level),
     }
 }

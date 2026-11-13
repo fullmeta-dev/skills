@@ -64,7 +64,8 @@ commit into a read-only checkout. Use `--track BRANCH_OR_TAG` or
 `--reference REF` to preview a particular revision.
 
 `list` caches remote checkouts by immutable revision under
-`$SKILLS_CACHE_DIR` (else `$MISE_CACHE_DIR/skills`, else `~/.cache/skills`) and
+`$SKILLS_CACHE_DIR` (else `$MISE_CACHE_DIR/skills`, else
+`$XDG_CACHE_HOME/skills`, else `~/.cache/skills`) and
 caches resolved refs for `SKILLS_CACHE_TTL` seconds (default 300), so repeat
 listings are local. `--refresh` re-resolves refs, `SKILLS_NO_CACHE=1` disables
 caching, and `skills cache [--clean] [--json]` reports or removes the cache.

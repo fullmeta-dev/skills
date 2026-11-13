@@ -169,10 +169,39 @@ pub fn sync(config: &Config, global: bool, force: bool) -> Result<SyncReport, St
 fn sync_changes(
     config: &Config,
     global: bool,
+    manifest: OwnershipManifest,
+    desired: BTreeMap<LinkKey, DesiredLink>,
+    force: bool,
+    warnings: Vec<String>,
+) -> Result<SyncReport, String> {
+    let mut replacements = Vec::new();
+    match sync_changes_inner(
+        config,
+        global,
+        manifest,
+        desired,
+        force,
+        warnings,
+        &mut replacements,
+    ) {
+        Ok(report) => Ok(report),
+        Err(error) => match undo_replacements(&replacements) {
+            Ok(()) => Err(error),
+            Err(undo) => Err(format!(
+                "{error}; also could not restore replaced targets: {undo}"
+            )),
+        },
+    }
+}
+
+fn sync_changes_inner(
+    config: &Config,
+    global: bool,
     mut manifest: OwnershipManifest,
     desired: BTreeMap<LinkKey, DesiredLink>,
     force: bool,
     warnings: Vec<String>,
+    replacements: &mut Vec<(PathBuf, PathBuf)>,
 ) -> Result<SyncReport, String> {
     let mut report = SyncReport::default();
     report.warnings = warnings;
@@ -214,7 +243,7 @@ fn sync_changes(
 
     for (key, desired_link) in &desired {
         let old = old_links.get(key);
-        match converge_link(desired_link, old, force) {
+        match converge_link(desired_link, old, force, replacements) {
             Ok(ConvergeResult::Created) => report.linked += 1,
             Ok(ConvergeResult::Updated) => {
                 report.removed += 1;
@@ -752,17 +781,17 @@ fn desired_tool_links(config: &Config, global: bool, tool: &ToolInfo) -> Result<
     let discovery = discover_with_subpath(&artifact.path, selection_root)
         .map_err(|error| format!("cannot discover {}: {error}", tool.key))?;
     let selection = discovery.select(&tool.include, &tool.exclude);
-    // A malformed skill elsewhere in a third-party source must not block
-    // activating the selected skills. Only errors that touch the selection, or
-    // the source as a whole, are fatal; the rest are reported as warnings.
+    // A malformed skill outside the selection must not block activating a
+    // third-party source, but source-wide policy errors and anything the
+    // declaration could have selected stay fatal.
     let mut warnings = Vec::new();
     for diagnostic in &discovery.diagnostics {
         if diagnostic.level != DiagnosticLevel::Error {
             continue;
         }
-        if diagnostic_touches_selection(diagnostic, &selection.selected) {
+        if !diagnostic_is_tolerated(&tool.include, diagnostic, &selection.selected) {
             return Err(format!(
-                "cannot discover {}: selected skills contain errors",
+                "cannot discover {}: source contains errors",
                 tool.key
             ));
         }
@@ -825,9 +854,35 @@ struct ToolLinks {
     warnings: Vec<String>,
 }
 
-/// Whether an error-level diagnostic should block activating this selection.
-/// A diagnostic without a path, or one inside a selected skill directory,
-/// affects what we are about to activate; anything else is only reported.
+/// Whether a source error can be downgraded to a warning. Only a malformed
+/// skill file the declaration could not have selected qualifies: source-wide
+/// policy errors (catalog, links, and so on) and anything a selector or the
+/// implicit select-all could reach stay fatal.
+fn diagnostic_is_tolerated(
+    includes: &[String],
+    diagnostic: &Diagnostic,
+    selected: &[Skill],
+) -> bool {
+    let Some(path) = diagnostic.path.as_deref() else {
+        return false;
+    };
+    if !path.ends_with("SKILL.md") {
+        return false;
+    }
+    if diagnostic_touches_selection(diagnostic, selected) {
+        return false;
+    }
+    // With no explicit selection the declaration intends every skill, and a
+    // tag selector could have matched the malformed skill, so neither can be
+    // assumed unselected.
+    if includes.is_empty() || includes.iter().any(|selector| selector.starts_with("tag:")) {
+        return false;
+    }
+    !includes
+        .iter()
+        .any(|selector| selector_matches_path(selector, path))
+}
+
 fn diagnostic_touches_selection(diagnostic: &Diagnostic, selected: &[Skill]) -> bool {
     let Some(path) = diagnostic.path.as_deref() else {
         return true;
@@ -835,6 +890,26 @@ fn diagnostic_touches_selection(diagnostic: &Diagnostic, selected: &[Skill]) -> 
     selected
         .iter()
         .any(|skill| path == skill.path || path.starts_with(&format!("{}/", skill.path)))
+}
+
+/// Best-effort match of one selector against a diagnostic path, used only to
+/// decide whether a malformed skill could have been selected.
+fn selector_matches_path(selector: &str, path: &str) -> bool {
+    let directory = path.strip_suffix("/SKILL.md").unwrap_or(path);
+    let basename = directory.rsplit('/').next().unwrap_or(directory);
+    if selector == directory || selector == basename || selector == path {
+        return true;
+    }
+    if directory.ends_with(&format!("/{selector}")) {
+        return true;
+    }
+    if selector.contains(['*', '?', '[']) {
+        if let Ok(glob) = globset::Glob::new(selector) {
+            let matcher = glob.compile_matcher();
+            return matcher.is_match(directory) || matcher.is_match(basename);
+        }
+    }
+    false
 }
 
 fn describe_diagnostic(diagnostic: &Diagnostic) -> String {
@@ -886,6 +961,7 @@ fn converge_link(
     desired: &DesiredLink,
     old: Option<&OwnedLink>,
     force: bool,
+    replacements: &mut Vec<(PathBuf, PathBuf)>,
 ) -> Result<ConvergeResult, String> {
     let existing = symlink_target(&desired.target);
     match existing {
@@ -900,6 +976,7 @@ fn converge_link(
         TargetState::Other => {
             if force {
                 let backup = back_up_target(&desired.target)?;
+                replacements.push((desired.target.clone(), backup.clone()));
                 create_link(desired)?;
                 Ok(ConvergeResult::Replaced(format!(
                     "replaced existing target {}; previous contents moved to {}",
@@ -974,13 +1051,37 @@ fn back_up_target(target: &Path) -> Result<PathBuf, String> {
         .unwrap_or(0);
     let mut candidate = parent.join(format!(".skills-replaced-{name}-{stamp}"));
     let mut counter = 1;
-    while candidate.exists() {
+    while fs::symlink_metadata(&candidate).is_ok() {
         candidate = parent.join(format!(".skills-replaced-{name}-{stamp}.{counter}"));
         counter += 1;
     }
     fs::rename(target, &candidate)
         .map_err(|error| format!("cannot move {} aside: {error}", target.display()))?;
     Ok(candidate)
+}
+
+/// Reverse forced file/directory replacements after a later failure. A symlink
+/// created at the target is removed and the displaced original is renamed back,
+/// so a failed `--force` sync leaves the previous tree intact.
+fn undo_replacements(replacements: &[(PathBuf, PathBuf)]) -> Result<(), String> {
+    let mut errors = Vec::new();
+    for (target, backup) in replacements.iter().rev() {
+        if matches!(symlink_target(target), TargetState::Symlink(_)) {
+            if let Err(error) = remove_link(target) {
+                errors.push(error);
+            }
+        }
+        if fs::symlink_metadata(backup).is_ok() {
+            if let Err(error) = fs::rename(backup, target) {
+                errors.push(format!("cannot restore {}: {error}", target.display()));
+            }
+        }
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
+    }
 }
 
 fn remove_owned(link: &OwnedLink) -> Result<bool, String> {

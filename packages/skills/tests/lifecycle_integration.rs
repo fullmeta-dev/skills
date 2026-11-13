@@ -306,6 +306,44 @@ fn syncs_all_adapters_with_isolated_ownership_and_recovers_stale_links() {
     assert!(status.status.success());
     assert!(String::from_utf8_lossy(&status.stdout).contains("conflict"));
 
+    // --force replaces the unmanaged file and moves the original aside.
+    let forced = run(
+        &project,
+        &[
+            "sync",
+            "--path",
+            project_config.to_str().unwrap(),
+            "--force",
+        ],
+        &envs,
+    );
+    assert!(
+        forced.status.success(),
+        "{}",
+        String::from_utf8_lossy(&forced.stderr)
+    );
+    assert!(fs::symlink_metadata(&pi_target)
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    assert!(String::from_utf8_lossy(&forced.stdout).contains("replaced:"));
+    let backups: Vec<PathBuf> = fs::read_dir(project.join(".pi/skills"))
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(".skills-replaced-demo"))
+        })
+        .collect();
+    assert_eq!(
+        backups.len(),
+        1,
+        "force must move the conflicting file aside"
+    );
+    assert_eq!(fs::read_to_string(&backups[0]).unwrap(), "unmanaged");
+
     fs::remove_file(&pi_target).unwrap();
     let prune_without_sync = run(
         &project,
@@ -1503,4 +1541,140 @@ fn unselected_source_errors_warn_without_blocking_activation() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(project.join(".agents/skills/good").is_symlink());
+}
+
+#[test]
+fn force_replaces_an_unmanaged_directory_and_reports_the_backup() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path().join("home");
+    let data = temp.path().join("data");
+    let state = temp.path().join("state");
+    let project = temp.path().join("project");
+    let source = temp.path().join("source");
+    for directory in [&home, &data, &state, &project, &source] {
+        fs::create_dir_all(directory).unwrap();
+    }
+    skill(&source, "demo");
+    let config = project.join("mise.toml");
+    let envs = [
+        ("HOME", home.as_path()),
+        ("MISE_DATA_DIR", data.as_path()),
+        ("MISE_STATE_DIR", state.as_path()),
+    ];
+    let output = run(
+        &project,
+        &[
+            "use",
+            "--path",
+            config.to_str().unwrap(),
+            &format!("path:{}", source.display()),
+            "demo",
+            "--agent",
+            "pi",
+        ],
+        &envs,
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let pinned = version(&config);
+    install_snapshot(&data, &pinned, &source);
+
+    let target = project.join(".pi/skills/demo");
+    fs::create_dir_all(&target).unwrap();
+    fs::write(target.join("SKILL.md"), "foreign").unwrap();
+
+    let conflict = run(
+        &project,
+        &["sync", "--path", config.to_str().unwrap()],
+        &envs,
+    );
+    assert!(conflict.status.success());
+    assert!(String::from_utf8_lossy(&conflict.stderr).contains("conflict"));
+    assert!(target.is_dir() && !target.is_symlink());
+
+    let forced = run(
+        &project,
+        &["sync", "--path", config.to_str().unwrap(), "--force"],
+        &envs,
+    );
+    assert!(
+        forced.status.success(),
+        "{}",
+        String::from_utf8_lossy(&forced.stderr)
+    );
+    assert!(fs::symlink_metadata(&target)
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    let backups: Vec<PathBuf> = fs::read_dir(project.join(".pi/skills"))
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(".skills-replaced-demo"))
+        })
+        .collect();
+    assert_eq!(backups.len(), 1);
+    assert_eq!(
+        fs::read_to_string(backups[0].join("SKILL.md")).unwrap(),
+        "foreign"
+    );
+}
+
+#[test]
+fn selected_source_errors_still_block_activation() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path().join("home");
+    let data = temp.path().join("data");
+    let state = temp.path().join("state");
+    let project = temp.path().join("project");
+    let source = temp.path().join("source");
+    for directory in [&home, &data, &state, &project, &source] {
+        fs::create_dir_all(directory).unwrap();
+    }
+    let broken = source.join("broken");
+    fs::create_dir_all(&broken).unwrap();
+    fs::write(broken.join("SKILL.md"), "---\nname: [\n---\n").unwrap();
+    let config = project.join("mise.toml");
+    let envs = [
+        ("HOME", home.as_path()),
+        ("MISE_DATA_DIR", data.as_path()),
+        ("MISE_STATE_DIR", state.as_path()),
+    ];
+    let output = run(
+        &project,
+        &[
+            "use",
+            "--path",
+            config.to_str().unwrap(),
+            &format!("path:{}", source.display()),
+            "broken",
+            "--agent",
+            "agents",
+        ],
+        &envs,
+    );
+    assert!(output.status.success());
+    let pinned = version(&config);
+    install_snapshot(&data, &pinned, &source);
+
+    let output = run(
+        &project,
+        &["sync", "--path", config.to_str().unwrap()],
+        &envs,
+    );
+    assert!(
+        !output.status.success(),
+        "a selected malformed skill must still block activation"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("source contains errors"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
