@@ -265,6 +265,89 @@ fn self_update_reads_manifest_from_latest_release_asset_fixture() {
 
 #[test]
 #[cfg(unix)]
+fn self_update_authenticates_private_github_release_api_and_asset() {
+    use std::os::unix::fs::PermissionsExt;
+    let temp = TempDir::new().unwrap();
+    let bin_dir = temp.path().join("bin");
+    let config_dir = temp.path().join("config");
+    fs::create_dir_all(&bin_dir).unwrap();
+    fs::create_dir_all(&config_dir).unwrap();
+    let mise = fake_mise(&bin_dir);
+    let config = config_dir.join("config.toml");
+    fs::write(
+        &config,
+        "[tools.\"github:fullmeta-dev/skills\"]\nversion = \"0.1.0\"\nbin = \"skills\"\n",
+    )
+    .unwrap();
+    let curl = bin_dir.join("curl");
+    let curl_log = temp.path().join("curl.log");
+    fs::write(
+        &curl,
+        r#"#!/bin/sh
+set -eu
+printf 'CALL: %s\n' "$*" >> "$FAKE_CURL_LOG"
+for arg in "$@"; do
+    url="$arg"
+done
+case "$url" in
+  */releases/latest)
+    printf '%s\n' '{"tag_name":"v0.3.0","assets":[{"name":"release-compatibility.json","url":"https://api.github.com/repos/fullmeta-dev/skills/releases/assets/42","browser_download_url":"https://github.com/fullmeta-dev/skills/releases/download/v0.3.0/release-compatibility.json"}]}'
+    ;;
+  */releases/assets/42)
+    printf '%s\n' '{"schema_version":1,"latest":"0.3.0","releases":{"0.3.0":{"minimum_mise":"2026.11.7","plugin_url":"https://github.com/fullmeta-dev/skills.git","plugin_revision":"cccccccccccccccccccccccccccccccccccccccc"}}}'
+    ;;
+  *)
+    echo "unexpected curl URL: $url" >&2
+    exit 22
+    ;;
+esac
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&curl, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let output = Command::new(binary())
+        .current_dir(temp.path())
+        .args(["self-update", "--dry-run"])
+        .env("MISE_BIN", &mise)
+        .env("MISE_CONFIG_DIR", &config_dir)
+        .env("HOME", temp.path().join("home"))
+        .env("PATH", &bin_dir)
+        .env("FAKE_MISE_LOG", temp.path().join("mise.log"))
+        .env("FAKE_CURL_LOG", &curl_log)
+        .env("MISE_GITHUB_TOKEN", "test-secret-token")
+        .env_remove("GITHUB_TOKEN")
+        .env_remove("GH_TOKEN")
+        .env_remove("SKILLS_COMPATIBILITY_MANIFEST")
+        .env_remove("SKILLS_RELEASE_API")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let calls = fs::read_to_string(&curl_log).unwrap();
+    let lines: Vec<&str> = calls.lines().collect();
+    assert_eq!(lines.len(), 2, "expected 2 curl calls, got:\n{calls}");
+    assert!(
+        lines[0].contains("Authorization: Bearer test-secret-token")
+            && lines[0].contains("Accept: application/vnd.github+json")
+            && lines[0].contains("https://api.github.com/repos/fullmeta-dev/skills/releases/latest"),
+        "unexpected release API call: {}",
+        lines[0]
+    );
+    assert!(
+        lines[1].contains("Authorization: Bearer test-secret-token")
+            && lines[1].contains("Accept: application/octet-stream")
+            && lines[1].contains("https://api.github.com/repos/fullmeta-dev/skills/releases/assets/42"),
+        "unexpected asset call: {}",
+        lines[1]
+    );
+}
+
+#[test]
+#[cfg(unix)]
 fn detects_foreign_windows_executable_on_portable_path() {
     let temp = TempDir::new().unwrap();
     let bin_dir = temp.path().join("bin");

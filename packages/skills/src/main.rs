@@ -1283,6 +1283,23 @@ fn github_token() -> Option<String> {
         .find_map(|key| std::env::var(key).ok().filter(|value| !value.is_empty()))
 }
 
+fn is_github_host(location: &str) -> bool {
+    let Some((_, rest)) = location.split_once("://") else {
+        return false;
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host_port = authority.rsplit('@').next().unwrap_or("");
+    let host = host_port
+        .split(':')
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    host == "github.com"
+        || host.ends_with(".github.com")
+        || host == "githubusercontent.com"
+        || host.ends_with(".githubusercontent.com")
+}
+
 /// Download a GitHub URL with curl, sending a token when one is configured so
 /// private repositories work. curl does not forward the header across the
 /// redirect to the asset host.
@@ -1292,7 +1309,7 @@ fn curl_github(location: &str, action: &str, headers: &[&str]) -> Result<Vec<u8>
     for header in headers {
         command.args(["--header", header]);
     }
-    if location.contains("github.com") || location.contains("githubusercontent.com") {
+    if is_github_host(location) {
         if let Some(token) = github_token() {
             command
                 .arg("--header")
@@ -2277,5 +2294,29 @@ mod tests {
             );
         }
         assert_eq!(preferred_plugin_url(None, manifest), manifest);
+    }
+
+    #[test]
+    fn github_host_check_rejects_spoofed_urls() {
+        for allowed in [
+            "https://api.github.com/repos/fullmeta-dev/skills/releases/latest",
+            "https://github.com/fullmeta-dev/skills/releases/download/v0.2.1/release-compatibility.json",
+            "https://objects.githubusercontent.com/github-production-release-asset/1",
+            "https://API.GITHUB.COM:443/repos/fullmeta-dev/skills/releases/latest",
+        ] {
+            assert!(is_github_host(allowed), "expected GitHub host: {allowed}");
+        }
+        for rejected in [
+            "https://evil.example/github.com/releases",
+            "https://evil.example?next=github.com",
+            "https://notgithub.com/repos/fullmeta-dev/skills",
+            "https://github.com.evil.example/repos/fullmeta-dev/skills",
+            "/local/path/github.com/release.json",
+        ] {
+            assert!(
+                !is_github_host(rejected),
+                "expected non-GitHub host: {rejected}"
+            );
+        }
     }
 }
