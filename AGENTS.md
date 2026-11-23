@@ -1,4 +1,4 @@
-My skills for ai agents.
+Mise backend plugin and Rust CLI for managing Agent Skills.
 
 Before using a Matt Pocock skill, load `adapt-matt-pocock-skills` and apply it
 for the current harness.

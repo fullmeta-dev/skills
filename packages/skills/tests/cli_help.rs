@@ -47,7 +47,7 @@ fn documented_commands_are_self_documenting_for_operators_and_agents() {
         "path:DIR",
         "tag:web+frontend",
         "excludes always win",
-        "[tools.\"skills:fullmeta-dev/skills\"]",
+        "[tools.\"skills:owner/skills\"]",
         "postinstall = [\"skills sync --locked\"]",
         "~/.pi/agent/skills",
         "Ownership and safety:",

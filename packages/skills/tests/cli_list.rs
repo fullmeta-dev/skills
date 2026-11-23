@@ -64,26 +64,46 @@ fn list_tree_reports_missing_selectors_without_v1_failure() {
 }
 
 #[test]
-fn list_current_repository_ignores_virtualenv_and_developer_artifacts() {
-    let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let source = format!("path:{}", repository.display());
+fn list_repository_ignores_virtualenv_and_developer_artifacts() {
+    let repository = TempDir::new().unwrap();
+    let skill = repository.path().join("skills/demo");
+    fs::create_dir_all(&skill).unwrap();
+    fs::write(
+        skill.join("SKILL.md"),
+        "---\nname: demo\ndescription: Fixture skill.\n---\n# Demo\n",
+    )
+    .unwrap();
+    fs::create_dir_all(repository.path().join(".mise")).unwrap();
+    fs::write(
+        repository.path().join(".mise/skills.toml"),
+        "version = 1\n[discovery]\nroots = [\"skills\"]\n",
+    )
+    .unwrap();
+    fs::create_dir_all(repository.path().join(".venv/lib")).unwrap();
+    fs::write(repository.path().join(".venv/lib/SKILL.md"), "not a skill\n").unwrap();
+    fs::create_dir_all(repository.path().join("target/debug")).unwrap();
+    fs::write(repository.path().join("target/debug/SKILL.md"), "not a skill\n").unwrap();
+
+    let source = format!("path:{}", repository.path().display());
     let output = Command::new(env!("CARGO_BIN_EXE_skills"))
-        .args(["list", &source, "--json", "mise"])
+        .args(["list", &source, "--json", "demo"])
         .output()
-        .expect("run current repository skills list");
+        .expect("run repository skills list");
     assert!(
         output.status.success(),
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let value: Value = serde_json::from_slice(&output.stdout).expect("current repository JSON");
-    assert_eq!(value["skills"][0]["name"], "mise");
+    let value: Value = serde_json::from_slice(&output.stdout).expect("repository JSON");
+    assert_eq!(value["skills"][0]["name"], "demo");
     assert!(value["diagnostics"]
         .as_array()
         .unwrap()
         .iter()
         .all(|diagnostic| { diagnostic["level"] != "error" }));
-    assert!(!String::from_utf8_lossy(&output.stdout).contains(".venv"));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains(".venv"));
+    assert!(!stdout.contains("target"));
 }
 
 #[test]

@@ -50,7 +50,7 @@ prints each skill's name, description, tags, aliases, artifact files, source,
 revision, and selector decisions:
 
 ```sh
-skills list fullmeta-dev/skills --json --explain
+skills list owner/skills --json --explain
 skills list path:../my-skills --include tag:web
 skills use SOURCE SELECTOR... --agent AGENT...
 skills install
@@ -99,9 +99,9 @@ project/profile configs as ordinary mise files; use the normal uncommitted
 `mise.local.toml` or `mise.<env>.local.toml` for machine-specific choices.
 
 ```sh
-skills use --global fullmeta-dev/skills mise --agent agents
-skills use --env development fullmeta-dev/skills mise --agent pi
-skills use --path mise.local.toml fullmeta-dev/skills mise --agent pi
+skills use --global owner/skills mise --agent agents
+skills use --env development owner/skills mise --agent pi
+skills use --path mise.local.toml owner/skills mise --agent pi
 ```
 
 Diagnostics print the effective config path and environment.

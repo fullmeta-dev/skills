@@ -73,10 +73,10 @@ Selectors:
   selectors and repeated --include/--exclude; use takes positional includes.
 
 Configuration written by use:
-  skills use fullmeta-dev/skills mise --agent pi
+  skills use owner/skills mise --agent pi
 
-  [tools."skills:fullmeta-dev/skills"]
-  source = "github:fullmeta-dev/skills"
+  [tools."skills:owner/skills"]
+  source = "github:owner/skills"
   version = "rev:<resolved-40-character-commit>"
   track = "<resolved-branch>"
   include = ["mise"]
@@ -166,18 +166,18 @@ Caching (list):
   `skills cache` reports or cleans the cache.
 
 Examples:
-  skills list fullmeta-dev/skills --json --explain
-  skills list fullmeta-dev/skills 'skills/**' --refresh
-  skills use fullmeta-dev/skills mise --agent pi --agent claude
+  skills list owner/skills --json --explain
+  skills list owner/skills 'skills/**' --refresh
+  skills use owner/skills mise --agent pi --agent claude
   skills install && skills status --json
   skills upgrade && skills install
   skills sync --force
-  skills use --env development fullmeta-dev/skills mise --agent agents
+  skills use --env development owner/skills mise --agent agents
   skills sync --locked
   skills doctor --global
   skills cache --clean
   skills self-update --dry-run
-  skills remove skills:fullmeta-dev/skills mise
+  skills remove skills:owner/skills mise
   skills prune"#
 )]
 struct Cli {
@@ -189,17 +189,17 @@ struct Cli {
 enum Command {
     /// List discovered skills, optionally applying selectors.
     #[command(
-        after_help = "Normal: read-only discovery; no config is read or changed. SOURCE is required (path:DIR, a local directory, owner/repository, github:owner/repository, or git/https/ssh/file URL). Selectors are optional; with none, every discovered skill is listed. Remote sources are fetched at an immutable commit into a read-only checkout that is cached by revision and reused. --refresh re-resolves refs instead of using the cached resolution; SKILLS_CACHE_TTL and SKILLS_NO_CACHE control the cache. Without --track or --reference, Git sources use the remote default branch. Text output lists names, descriptions, tags, aliases, source, and revision; --json adds artifact files and selector data, --tree renders artifact files, and --explain explains shadowing and selector decisions. Missing selectors are reported in text output (JSON carries them as data without a warning); they never fail selection. Failure: malformed metadata, unsafe links, or unavailable refs return non-zero without editing files. Example: skills list fullmeta-dev/skills --json --explain"
+        after_help = "Normal: read-only discovery; no config is read or changed. SOURCE is required (path:DIR, a local directory, owner/repository, github:owner/repository, or git/https/ssh/file URL). Selectors are optional; with none, every discovered skill is listed. Remote sources are fetched at an immutable commit into a read-only checkout that is cached by revision and reused. --refresh re-resolves refs instead of using the cached resolution; SKILLS_CACHE_TTL and SKILLS_NO_CACHE control the cache. Without --track or --reference, Git sources use the remote default branch. Text output lists names, descriptions, tags, aliases, source, and revision; --json adds artifact files and selector data, --tree renders artifact files, and --explain explains shadowing and selector decisions. Missing selectors are reported in text output (JSON carries them as data without a warning); they never fail selection. Failure: malformed metadata, unsafe links, or unavailable refs return non-zero without editing files. Example: skills list owner/skills --json --explain"
     )]
     List(ListArgs),
     /// Declare a source and selected skills, resolving its immutable pin.
     #[command(
-        after_help = "Normal: writes a source declaration, selectors, agents, and a direct postinstall sync hook to the selected mise config. SOURCE and at least one --agent are required. Positional selectors replace the include list when supplied and preserve it when omitted; a new declaration with no selectors selects every discovered skill. Supplied agents replace the recorded agent list. Git sources resolve a full commit; local sources resolve a tree digest. use edits config only: it never installs or activates. Run skills list first to inspect matches; use records selectors without checking that they match. --locked requires an existing declaration of the same source and subpath and preserves its version and track. --reference resolves a ref now and records it as track; --track does the same for a branch or tag. Failure: an invalid source, agent, ref, or config value returns non-zero before saving config. Scope: project by default, --global, --path PATH, or --env ENV. Example: skills use fullmeta-dev/skills mise --agent pi --agent claude"
+        after_help = "Normal: writes a source declaration, selectors, agents, and a direct postinstall sync hook to the selected mise config. SOURCE and at least one --agent are required. Positional selectors replace the include list when supplied and preserve it when omitted; a new declaration with no selectors selects every discovered skill. Supplied agents replace the recorded agent list. Git sources resolve a full commit; local sources resolve a tree digest. use edits config only: it never installs or activates. Run skills list first to inspect matches; use records selectors without checking that they match. --locked requires an existing declaration of the same source and subpath and preserves its version and track. --reference resolves a ref now and records it as track; --track does the same for a branch or tag. Failure: an invalid source, agent, ref, or config value returns non-zero before saving config. Scope: project by default, --global, --path PATH, or --env ENV. Example: skills use owner/skills mise --agent pi --agent claude"
     )]
     Use(UseArgs),
     /// Refresh immutable pins for declared sources. This never installs or syncs.
     #[command(
-        after_help = "Normal: with no TOOL arguments, refreshes every skills declaration; otherwise only the named tool keys, with or without the skills: prefix. Git sources resolve their stored track, or the default branch when absent; local sources recompute the tree digest. Only changed version fields are saved, after every requested refresh succeeds. upgrade never installs or syncs; run skills install afterward to activate. --locked checks the requested declarations without resolving or changing any version. Failure: an undeclared tool, invalid source, or unavailable ref returns non-zero without installing or syncing. Scope: project by default, or --global/--path/--env. Example: skills upgrade skills:fullmeta-dev/skills"
+        after_help = "Normal: with no TOOL arguments, refreshes every skills declaration; otherwise only the named tool keys, with or without the skills: prefix. Git sources resolve their stored track, or the default branch when absent; local sources recompute the tree digest. Only changed version fields are saved, after every requested refresh succeeds. upgrade never installs or syncs; run skills install afterward to activate. --locked checks the requested declarations without resolving or changing any version. Failure: an undeclared tool, invalid source, or unavailable ref returns non-zero without installing or syncing. Scope: project by default, or --global/--path/--env. Example: skills upgrade skills:owner/skills"
     )]
     Upgrade(UpgradeArgs),
     /// Install selected configuration tools through normal mise, then sync links.
@@ -230,7 +230,7 @@ enum Command {
     Status(StatusArgs),
     /// Remove a declaration or selected entries from its include policy.
     #[command(
-        after_help = "Normal: removes the named stored include selectors (exact strings, not skill matches); omit selectors to remove the whole declaration. Removing the last include removes the declaration rather than selecting all. Config is saved before sync and artifact removal, so a later failure can leave the declaration changed. Artifacts are retained while another declaration in the selected config or the current project/global scopes references the same source+version. Failure: an unknown tool, or a request whose stored selectors all fail to match, returns non-zero; changed unmanaged links are reported and unrelated targets are untouched. Scope: project by default, or --global/--path/--env. Example: skills remove skills:fullmeta-dev/skills mise"
+        after_help = "Normal: removes the named stored include selectors (exact strings, not skill matches); omit selectors to remove the whole declaration. Removing the last include removes the declaration rather than selecting all. Config is saved before sync and artifact removal, so a later failure can leave the declaration changed. Artifacts are retained while another declaration in the selected config or the current project/global scopes references the same source+version. Failure: an unknown tool, or a request whose stored selectors all fail to match, returns non-zero; changed unmanaged links are reported and unrelated targets are untouched. Scope: project by default, or --global/--path/--env. Example: skills remove skills:owner/skills mise"
     )]
     Remove(RemoveArgs),
     /// Remove stale links recorded for the selected configuration root.

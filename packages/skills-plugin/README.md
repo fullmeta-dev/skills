@@ -10,8 +10,8 @@ A tool declaration supplies the canonical source and, optionally, a safe
 source-relative subpath:
 
 ```toml
-[tools."skills:fullmeta-dev/skills"]
-source = "github:fullmeta-dev/skills"
+[tools."skills:owner/skills"]
+source = "github:owner/skills"
 version = "rev:<40-character-commit>"
 source_subpath = "skills"
 ```

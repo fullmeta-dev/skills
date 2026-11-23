@@ -1,6 +1,6 @@
 # Agent skills
 
-This repository is an Agent Skills source tree and a mise backend/CLI. The
+This repository provides a mise backend plugin and CLI for Agent Skills. The
 public executable is `skills`; it installs immutable source snapshots through
 mise and materializes selected skills for supported agents.
 
@@ -47,8 +47,8 @@ first; `list` is read-only and shows names, descriptions, tags, aliases, files,
 and selector decisions:
 
 ```sh
-skills list fullmeta-dev/skills --json --explain
-skills use fullmeta-dev/skills mise --agent pi
+skills list owner/skills --json --explain
+skills use owner/skills mise --agent pi
 skills install
 skills status
 ```
@@ -100,14 +100,14 @@ at
 other normal mise config scopes:
 
 ```sh
-skills use --global fullmeta-dev/skills mise --agent agents
-skills use --env development fullmeta-dev/skills mise --agent pi
-skills use --path mise.local.toml fullmeta-dev/skills mise --agent pi
+skills use --global owner/skills mise --agent agents
+skills use --env development owner/skills mise --agent pi
+skills use --path mise.local.toml owner/skills mise --agent pi
 ```
 
 A source repository may add `.mise/skills.toml` to declare discovery roots,
-tags, aliases, and exclusions; this repository does so to publish only
-`skills/` and keep implementation/tests out of its catalog.
+tags, aliases, and exclusions so only published skill directories appear in its
+catalog.
 
 ## Updates and removal
 
@@ -153,8 +153,8 @@ skills install --accept-collision
 Remove policy and owned links without touching unrelated targets:
 
 ```sh
-skills remove skills:fullmeta-dev/skills mise
-skills remove skills:fullmeta-dev/skills
+skills remove skills:owner/skills mise
+skills remove skills:owner/skills
 skills prune
 ```
 
